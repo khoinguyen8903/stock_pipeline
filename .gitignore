@@ -1,0 +1,23 @@
+# BẢO MẬT TUYỆT ĐỐI (KHÔNG ĐƯỢC PUSH LÊN)
+.env
+data/gcpkey.json
+gcpkey.json
+
+# Thư mục dữ liệu sinh ra khi chạy (Không cần push)
+logs/
+plugins/
+kafka_data/
+postgres_data/
+checkpoints/
+/tmp/
+
+# Rác của Python và hệ điều hành
+__pycache__/
+*.pyc
+.DS_Store
+# Bỏ qua môi trường ảo của Python
+venv/
+
+# CHẮC CHẮN BỎ QUA FILE KEY GCP TRONG THƯ MỤC DATA
+data/gcpkey.json
+data/*.json
