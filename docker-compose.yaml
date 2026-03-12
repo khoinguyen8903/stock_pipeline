@@ -54,13 +54,11 @@ services:
   airflow:
     build: .
     container_name: airflow
-    # Tự động khởi động lại nếu container bị crash do thiếu RAM
     restart: always
     depends_on:
       - postgres
       - kafka
     environment:
-      # Kích hoạt chế độ chạy song song thực sự
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
       - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
@@ -68,12 +66,16 @@ services:
       - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
       - SPARK_HOME=/opt/spark
       
-      # Tối ưu Scheduler để tránh lỗi "Heartbeat" (thanh màu vàng)
+      # Tối ưu Scheduler
       - AIRFLOW__CORE__DAG_DIR_LIST_INTERVAL=60
       - AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL=30
       - AIRFLOW__CORE__PARALLELISM=32
       - AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG=16
       - AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT=300
+      
+      # ĐÃ THÊM: Truyền thẳng API Key từ file .env của máy chủ vào Container Airflow
+      - VNSTOCK_API_KEY=${VNSTOCK_API_KEY}
+
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
@@ -87,7 +89,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 3G # Giữ mức 3G để gánh cả Spark Core
+          memory: 3G 
 
 volumes:
   postgres_data:

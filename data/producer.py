@@ -1,16 +1,6 @@
 from __future__ import annotations
 import os
 import sys
-
-# --- FIX LỖI VNSTOCK LOGGING (FINAL) ---
-# vnstock sẽ ghi log vào thư mục hiện tại.
-# Chuyển về /tmp để đảm bảo luôn có quyền ghi mà không ảnh hưởng logic khác.
-try:
-    os.chdir("/tmp")
-except:
-    pass
-# ---------------------------------------
-
 import json
 import logging
 import signal
@@ -25,13 +15,14 @@ from vnstock import Vnstock
 
 # --- CẤU HÌNH ---
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra='ignore')
+    # CHỈ CẦN ĐỌC BIẾN MÔI TRƯỜNG, KHÔNG CẦN TÌM FILE .ENV
+    model_config = SettingsConfigDict(env_file_encoding="utf-8", extra='ignore')
     
     # KAFKA HOST TRONG DOCKER
     kafka_broker: str = "kafka:29092"
     topic_name: str = "stock_ticks_realtime"
     
-    # ĐÃ SỬA: Danh sách rổ VN30 (30 công ty vốn hóa lớn nhất thị trường)
+    # Danh sách rổ VN30
     symbols: str = "ACB,BCM,BID,BVH,CTG,FPT,GAS,GVR,HDB,HPG,MBB,MSN,MWG,PLX,POW,SAB,SHB,SSB,SSI,STB,TCB,TPB,VCB,VHM,VIB,VIC,VJC,VNM,VPB,VRE"
     poll_interval_seconds: int = 15
     
@@ -104,7 +95,7 @@ class VnStockPoller:
                 except Exception as e:
                     self._logger.error(f"Error {sym}: {e}")
                 
-                # ĐÃ SỬA: Quãng nghỉ 1 giây sau MỖI mã để tránh bị API đánh dấu là tấn công DDoS
+                # Quãng nghỉ 1 giây sau MỖI mã 
                 if self._running:
                     time.sleep(1)
             
@@ -115,7 +106,9 @@ class VnStockPoller:
     def _process_symbol(self, sym: str):
         try:
             stock_client = Vnstock().stock(symbol=sym, source='VCI')
-            df_data = stock_client.quote.intraday()
+            
+            # Ép API trả về tối đa 1000 record thay vì 100 record mặc định
+            df_data = stock_client.quote.intraday(page_size=1000)
 
             if df_data is None or df_data.empty: return
 
@@ -156,6 +149,21 @@ class VnStockPoller:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
     settings = Settings()
+
+    # KIỂM TRA XEM HỆ THỐNG ĐÃ CÓ API KEY CHƯA
+    api_key = os.environ.get("VNSTOCK_API_KEY")
+    if api_key:
+        # Nếu thư viện vnstock chạy ngầm cần key này, nó đã nằm sẵn trong os.environ
+        logging.info("Đã nhận diện VNSTOCK_API_KEY từ biến môi trường Docker.")
+    else:
+        logging.warning("KHÔNG TÌM THẤY API KEY! Hệ thống sẽ chạy với quyền Guest.")
+
+    # CHUYỂN THƯ MỤC LÀM VIỆC SANG /TMP ĐỂ CHẶN LOG RÁC CỦA VNSTOCK
+    try:
+        os.chdir("/tmp")
+    except:
+        pass
+
     client = KafkaProducerClient(settings)
     poller = VnStockPoller(settings, client)
 
