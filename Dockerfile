@@ -45,7 +45,7 @@ RUN pip install --no-cache-dir \
     pyspark==3.5.0 \
     confluent-kafka \
     pandas \
-    vnstock \
+    vnstock==0.2.9.2 \
     pyarrow \
     fsspec \
     google-cloud-storage \
