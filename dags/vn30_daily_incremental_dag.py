@@ -80,22 +80,48 @@ with DAG(
     t2 = PythonOperator(task_id='extract_today_1m', python_callable=fetch_today_1m)
 
     t3 = GCSToBigQueryOperator(
-        task_id='append_daily_bq',
+        task_id='load_daily_bq',
         bucket=GCS_BUCKET,
-        source_objects=[f'bronze/daily_run/{TODAY_STR}_daily.parquet'],
+        source_objects=['bronze/historical_daily/*.parquet'],
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_daily',
         source_format='PARQUET',
-        write_disposition='WRITE_APPEND',
+        write_disposition='WRITE_TRUNCATE',
+        # --- KHAI BÁO SCHEMA TƯỜNG MINH ---
+        autodetect=False, # Tắt tự động đoán
+        schema_fields=[
+            {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
+            {'name': 'symbol', 'type': 'STRING', 'mode': 'NULLABLE'},
+            {'name': 'open', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'high', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'low', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'close', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'volume', 'type': 'INTEGER', 'mode': 'NULLABLE'},
+            {'name': 'ingestion_timestamp', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
+        ],
+        time_partitioning={"type": "DAY", "field": "time"},
         gcp_conn_id=GCP_CONN_ID,
     )
 
     t4 = GCSToBigQueryOperator(
-        task_id='append_1m_bq',
+        task_id='load_1m_bq',
         bucket=GCS_BUCKET,
-        source_objects=[f'bronze/daily_run/{TODAY_STR}_1m.parquet'],
+        source_objects=['bronze/historical_1m/*.parquet'],
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_1m',
         source_format='PARQUET',
-        write_disposition='WRITE_APPEND',
+        write_disposition='WRITE_TRUNCATE',
+        # Tương tự cho nến 1 phút
+        autodetect=False,
+        schema_fields=[
+            {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
+            {'name': 'symbol', 'type': 'STRING', 'mode': 'NULLABLE'},
+            {'name': 'open', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'high', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'low', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'close', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'volume', 'type': 'INTEGER', 'mode': 'NULLABLE'},
+            {'name': 'ingestion_timestamp', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
+        ],
+        time_partitioning={"type": "MONTH", "field": "time"},
         gcp_conn_id=GCP_CONN_ID,
     )
 
