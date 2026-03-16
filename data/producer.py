@@ -10,23 +10,36 @@ from typing import Any, Dict
 
 import pandas as pd
 from confluent_kafka import KafkaError, Producer
+from confluent_kafka.admin import AdminClient, NewTopic  # BỔ SUNG: Thư viện quản lý Kafka
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from vnstock import Vnstock
 
+# --- BỔ SUNG: LỚP GIÁP BẢO VỆ MẠNG (CHỐNG LỖI 502 VÀ TIMEOUT) ---
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import vnstock.core.utils.client as vn_client
+
+session = requests.Session()
+# Tự động gọi lại tối đa 3 lần nếu gặp lỗi mạng, mỗi lần cách nhau 0.5s, 1s, 2s...
+retry = Retry(connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+adapter = HTTPAdapter(max_retries=retry)
+session.mount('http://', adapter)
+session.mount('https://', adapter)
+vn_client.session = session # Ghi đè cấu hình mạng mặc định của vnstock
+# -----------------------------------------------------------------
+
+
 # --- CẤU HÌNH ---
 class Settings(BaseSettings):
-    # CHỈ CẦN ĐỌC BIẾN MÔI TRƯỜNG, KHÔNG CẦN TÌM FILE .ENV
     model_config = SettingsConfigDict(env_file_encoding="utf-8", extra='ignore')
     
-    # KAFKA HOST TRONG DOCKER
     kafka_broker: str = "kafka:29092"
     topic_name: str = "stock_ticks_realtime"
     
-    # Danh sách rổ VN30
     symbols: str = "ACB,BCM,BID,BVH,CTG,FPT,GAS,GVR,HDB,HPG,MBB,MSN,MWG,PLX,POW,SAB,SHB,SSB,SSI,STB,TCB,TPB,VCB,VHM,VIB,VIC,VJC,VNM,VPB,VRE"
     poll_interval_seconds: int = 15
     
-    # Kafka Producer Tuning
     kafka_queue_buffering_max_messages: int = 200_000
     kafka_batch_num_messages: int = 1_000
     kafka_linger_ms: int = 100
@@ -34,6 +47,33 @@ class Settings(BaseSettings):
     kafka_acks: str = "all"
     kafka_retries: int = 5
     kafka_delivery_timeout_ms: int = 60_000
+
+
+# --- HÀM KHAI SINH TOPIC TỪ ĐẦU ---
+def ensure_topic_exists(settings: Settings):
+    admin_client = AdminClient({'bootstrap.servers': settings.kafka_broker})
+    topic_name = settings.topic_name
+
+    logging.info(f"🔍 Kiểm tra sự tồn tại của Topic: '{topic_name}'...")
+    try:
+        metadata = admin_client.list_topics(timeout=10)
+        if topic_name not in metadata.topics:
+            logging.info(f"🛠️ Topic '{topic_name}' chưa tồn tại. Bắt đầu khởi tạo...")
+            # Tạo topic mới với 1 partition và 1 replica
+            new_topic = NewTopic(topic_name, num_partitions=1, replication_factor=1)
+            fs = admin_client.create_topics([new_topic])
+            
+            for topic, f in fs.items():
+                try:
+                    f.result() 
+                    logging.info(f"✅ Đã tạo thành công topic: {topic}")
+                except Exception as e:
+                    logging.error(f"❌ Lỗi khi tạo topic {topic}: {e}")
+        else:
+            logging.info(f"✅ Topic '{topic_name}' đã tồn tại. Bỏ qua bước tạo.")
+    except Exception as e:
+        logging.error(f"❌ Lỗi kết nối Kafka Admin: {e}")
+
 
 # --- KAFKA CLIENT ---
 class KafkaProducerClient:
@@ -75,6 +115,7 @@ class KafkaProducerClient:
         self._logger.info("Flushing...")
         return self._producer.flush(timeout)
 
+
 # --- LOGIC LẤY DỮ LIỆU ---
 class VnStockPoller:
     def __init__(self, settings: Settings, kafka_client: KafkaProducerClient) -> None:
@@ -95,19 +136,15 @@ class VnStockPoller:
                 except Exception as e:
                     self._logger.error(f"Error {sym}: {e}")
                 
-                # Quãng nghỉ 1 giây sau MỖI mã 
                 if self._running:
                     time.sleep(1)
             
             if self._running:
-                # Sau khi xong 1 vòng 30 mã (tốn ~30s), nghỉ thêm 15s rồi lặp lại
                 time.sleep(self._settings.poll_interval_seconds)
 
     def _process_symbol(self, sym: str):
         try:
             stock_client = Vnstock().stock(symbol=sym, source='VCI')
-            
-            # Ép API trả về tối đa 1000 record thay vì 100 record mặc định
             df_data = stock_client.quote.intraday(page_size=1000)
 
             if df_data is None or df_data.empty: return
@@ -146,23 +183,24 @@ class VnStockPoller:
         self._logger.info("Stopping...")
         self._running = False
 
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
     settings = Settings()
 
-    # KIỂM TRA XEM HỆ THỐNG ĐÃ CÓ API KEY CHƯA
     api_key = os.environ.get("VNSTOCK_API_KEY")
     if api_key:
-        # Nếu thư viện vnstock chạy ngầm cần key này, nó đã nằm sẵn trong os.environ
         logging.info("Đã nhận diện VNSTOCK_API_KEY từ biến môi trường Docker.")
     else:
         logging.warning("KHÔNG TÌM THẤY API KEY! Hệ thống sẽ chạy với quyền Guest.")
 
-    # CHUYỂN THƯ MỤC LÀM VIỆC SANG /TMP ĐỂ CHẶN LOG RÁC CỦA VNSTOCK
     try:
         os.chdir("/tmp")
     except:
         pass
+
+    # BƯỚC QUAN TRỌNG: GỌI HÀM KHAI SINH TOPIC TRƯỚC KHI CHẠY POLLER
+    ensure_topic_exists(settings)
 
     client = KafkaProducerClient(settings)
     poller = VnStockPoller(settings, client)
