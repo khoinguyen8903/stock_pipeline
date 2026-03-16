@@ -19,7 +19,6 @@ VN30_TICKERS = [
     'TCB', 'TPB', 'VCB', 'VHM', 'VIB', 'VIC', 'VJC', 'VNM', 'VPB', 'VRE'
 ]
 
-# Lấy ngày hôm nay dưới dạng chuỗi 'YYYY-MM-DD'
 TODAY_STR = datetime.now().strftime('%Y-%m-%d')
 
 default_args = {
@@ -30,13 +29,11 @@ default_args = {
 }
 
 def upload_to_gcs(df, file_name, destination_blob_name):
-    if df.empty:
-        return
+    if df.empty: return
     temp_path = f"/tmp/{file_name}"
+    df['time'] = pd.to_datetime(df['time']) # Đảm bảo kiểu datetime
     df['symbol'] = df['symbol'].astype(str)
-    # Thêm cột thời gian cào (Ingestion Time) để dbt biết dòng nào mới hơn mà lọc
     df['ingestion_timestamp'] = pd.Timestamp.now(tz='UTC') 
-    
     df.to_parquet(temp_path, index=False)
     gcs_hook = GCSHook(gcp_conn_id=GCP_CONN_ID)
     gcs_hook.upload(bucket_name=GCS_BUCKET, object_name=destination_blob_name, filename=temp_path)
@@ -46,15 +43,12 @@ def fetch_today_daily(**kwargs):
     all_data = []
     for ticker in VN30_TICKERS:
         try:
-            # Lấy đúng ngày hôm nay
             df = stock_historical_data(symbol=ticker, start_date=TODAY_STR, end_date=TODAY_STR, resolution='1D', type='stock')
             if df is not None and not df.empty:
                 df['symbol'] = ticker
                 all_data.append(df)
             time.sleep(1)
-        except Exception as e:
-            print(f"Lỗi: {e}")
-            
+        except Exception as e: print(f"Lỗi: {e}")
     if all_data:
         final_df = pd.concat(all_data, ignore_index=True)
         upload_to_gcs(final_df, "today_daily.parquet", f"bronze/daily_run/{TODAY_STR}_daily.parquet")
@@ -63,15 +57,12 @@ def fetch_today_1m(**kwargs):
     all_data = []
     for ticker in VN30_TICKERS:
         try:
-            # Lấy đúng ngày hôm nay
             df = stock_historical_data(symbol=ticker, start_date=TODAY_STR, end_date=TODAY_STR, resolution='1', type='stock')
             if df is not None and not df.empty:
                 df['symbol'] = ticker
                 all_data.append(df)
             time.sleep(1)
-        except Exception as e:
-            print(f"Lỗi: {e}")
-            
+        except Exception as e: print(f"Lỗi: {e}")
     if all_data:
         final_df = pd.concat(all_data, ignore_index=True)
         upload_to_gcs(final_df, "today_1m.parquet", f"bronze/daily_run/{TODAY_STR}_1m.parquet")
@@ -79,8 +70,8 @@ def fetch_today_1m(**kwargs):
 with DAG(
     'vn30_daily_incremental',
     default_args=default_args,
-    description='Chạy hàng ngày: Cào và Append dữ liệu nến vào Bronze',
-    schedule_interval='0 10 * * 1-5', # 17:00 giờ VN, Từ T2 đến T6
+    description='Daily Incremental: Append vào Partitioned Tables',
+    schedule_interval='0 10 * * 1-5',
     start_date=datetime(2024, 3, 1),
     catchup=False,
     tags=['stock', 'daily', 'bronze'],
@@ -95,8 +86,9 @@ with DAG(
         source_objects=[f'bronze/daily_run/{TODAY_STR}_daily.parquet'],
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_daily',
         source_format='PARQUET',
-        write_disposition='WRITE_APPEND', # <--- ĐIỂM SÁNG TRONG TƯ DUY CỦA BẠN NẰM Ở ĐÂY
-        create_disposition='CREATE_IF_NEEDED',
+        write_disposition='WRITE_APPEND',
+        # CHO PHÉP TỰ CẬP NHẬT CỘT MỚI NẾU CẦN
+        schema_update_options=['ALLOW_FIELD_ADDITION'],
         gcp_conn_id=GCP_CONN_ID,
     )
 
@@ -106,8 +98,8 @@ with DAG(
         source_objects=[f'bronze/daily_run/{TODAY_STR}_1m.parquet'],
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_1m',
         source_format='PARQUET',
-        write_disposition='WRITE_APPEND', # <--- VÀ Ở ĐÂY
-        create_disposition='CREATE_IF_NEEDED',
+        write_disposition='WRITE_APPEND',
+        schema_update_options=['ALLOW_FIELD_ADDITION'],
         gcp_conn_id=GCP_CONN_ID,
     )
 
