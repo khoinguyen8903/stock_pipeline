@@ -46,6 +46,7 @@ RUN pip install --no-cache-dir \
     confluent-kafka \
     pandas \
     vnstock==0.2.9.2 \
+    ipython \
     pyarrow \
     fsspec \
     google-cloud-storage \
