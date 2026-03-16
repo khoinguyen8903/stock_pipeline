@@ -4,25 +4,28 @@ import psycopg2
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, LongType
+from dotenv import load_dotenv
 
-KAFKA_BROKER = "kafka:29092"
-TOPIC = "stock_ticks_realtime"
+# --- NẠP FILE .ENV (DÀNH CHO CHẠY LOCAL Ở MÁY TÍNH) ---
+load_dotenv()
 
-# --- LẤY MẬT KHẨU TỪ BIẾN MÔI TRƯỜNG ---
-db_password = os.environ.get("POSTGRES_PASSWORD")
+# --- LẤY CẤU HÌNH TỪ BIẾN MÔI TRƯỜNG ---
+KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "kafka:29092")
+TOPIC = os.environ.get("TOPIC_NAME", "stock_ticks_realtime")
+DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD")
 
-if not db_password:
-    raise ValueError("❌ CẢNH BÁO BẢO MẬT: Không tìm thấy biến môi trường POSTGRES_PASSWORD. Hãy kiểm tra lại Airflow DAG hoặc Docker env!")
+if not DB_PASSWORD:
+    raise ValueError("❌ CẢNH BÁO BẢO MẬT: Không tìm thấy POSTGRES_PASSWORD. Hãy kiểm tra lại file .env hoặc cấu hình Docker!")
 
 PG_CONFIG = {
     "host": "postgres",
     "port": 5432,
     "dbname": "airflow",
     "user": "airflow",
-    "password": db_password, # Gán tự động ở đây
+    "password": DB_PASSWORD,
 }
 
-# Dùng /tmp để tránh lỗi Permission Denied
+# Dùng /tmp để tránh lỗi Permission Denied khi chạy trong Docker
 CHECKPOINT_DIR = "/tmp/spark_checkpoints"
 
 TICK_SCHEMA = StructType([
@@ -77,7 +80,6 @@ def write_to_postgres(batch_df: DataFrame, batch_id: int) -> None:
     finally:
         conn.close()
 
-
 def main():
     print(">>> [1/5] KHOI TAO SPARK DOCKER...", flush=True)
     try:
@@ -119,7 +121,6 @@ def main():
         .select(F.from_json(F.col("json_str"), TICK_SCHEMA).alias("data"))
         .select("data.*")
         .filter(F.col("price").isNotNull())
-        # ĐÃ SỬA: Ép kiểu chuỗi ISO 8601 sang timestamp bằng cast() chuẩn của Spark
         .withColumn("event_time", F.col("ingested_at").cast("timestamp"))
     )
 

@@ -1,11 +1,8 @@
-version: '3.8'
-
 services:
   # 1. Kafka (KRaft Mode)
   kafka:
     image: apache/kafka:3.7.0
     container_name: kafka
-    # BẢO MẬT: Chỉ cho phép Kafka nội bộ nói chuyện với nhau, chặn kết nối từ internet nã vào cổng 9092
     ports:
       - "127.0.0.1:9092:9092" 
     environment:
@@ -21,7 +18,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G # TĂNG RAM: 768M lên 1G để Kafka nuốt 87k dòng mượt hơn
+          memory: 1G
 
   # 2. Postgres (Backend cho Airflow & App)
   postgres:
@@ -29,22 +26,21 @@ services:
     container_name: postgres
     environment:
       - POSTGRES_USER=airflow
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-KhoiNguyen_DB_2026!@#} # BẢO MẬT: Đổi pass cực mạnh
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD} 
       - POSTGRES_DB=airflow
     ports:
-      - "5432:5432" # Vẫn mở ra ngoài để bạn có thể dùng DBeaver ở máy tính kết nối vào xem data
+      - "5432:5432" 
     volumes:
       - postgres_data:/var/lib/postgresql/data
     deploy:
       resources:
         limits:
-          memory: 1G # TĂNG RAM: Postgres cần thêm bộ nhớ để xử lý bảng Daily OHLC sau này
+          memory: 1G
 
   # 3. Redis (Cache)
   redis:
     image: redis:alpine
     container_name: redis
-    # BẢO MẬT: Redis rất dễ bị hack cắm mã độc đào coin. Chặn ngay cổng public!
     ports:
       - "127.0.0.1:6379:6379" 
     deploy:
@@ -61,9 +57,15 @@ services:
       - postgres
       - kafka
     environment:
+      # --- SẠCH BÓNG HARDCODE 100% ---
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - VNSTOCK_API_KEY=${VNSTOCK_API_KEY}
+      - TOPIC_NAME=${TOPIC_NAME}
+      - KAFKA_BROKER=${KAFKA_BROKER} 
+      # --------------------------------
+      
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      # Cập nhật pass mới vào chuỗi kết nối
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:${POSTGRES_PASSWORD:-KhoiNguyen_DB_2026!@#}@postgres/airflow
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:${POSTGRES_PASSWORD}@postgres/airflow
       - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
       - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
@@ -75,15 +77,13 @@ services:
       - AIRFLOW__CORE__PARALLELISM=32
       - AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG=16
       - AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT=300
-      
-      - VNSTOCK_API_KEY=${VNSTOCK_API_KEY}
 
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./data:/opt/airflow/data
     ports:
-      - "8080:8080" # Đổi lại 8080 cho dễ nhớ khi gõ trên trình duyệt
+      - "8080:8080" 
     command: >
       bash -c "airflow db migrate && 
       airflow users create --username admin --password admin --firstname Khoi --lastname Nguyen --role Admin --email admin@example.com || true && 
@@ -91,7 +91,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 4G # TĂNG RAM: Cho Airflow 4GB thoải mái cào 1500 mã
+          memory: 4G
 
 volumes:
   postgres_data:
