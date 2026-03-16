@@ -32,16 +32,25 @@ def upload_to_gcs(df, file_name, destination_blob_name):
     if df.empty: return
     temp_path = f"/tmp/{file_name}"
     
-    # Ép kiểu tương tự file Bootstrap
+    # 1. ÉP KIỂU THỜI GIAN
     df['time'] = pd.to_datetime(df['time'])
     df['ingestion_timestamp'] = pd.Timestamp.now(tz='UTC') 
     
+    # 2. ÉP KIỂU STRING
     cols_to_string = ['open', 'high', 'low', 'close', 'volume', 'symbol', 'ticker']
     for col in cols_to_string:
         if col in df.columns:
             df[col] = df[col].astype(str)
             
-    df.to_parquet(temp_path, index=False, engine='pyarrow')
+    # 3. FIX LỖI NANOSECOND
+    df.to_parquet(
+        temp_path, 
+        index=False, 
+        engine='pyarrow',
+        coerce_timestamps='us',
+        allow_truncated_timestamps=True
+    )
+    
     gcs_hook = GCSHook(gcp_conn_id=GCP_CONN_ID)
     gcs_hook.upload(bucket_name=GCS_BUCKET, object_name=destination_blob_name, filename=temp_path)
     os.remove(temp_path)

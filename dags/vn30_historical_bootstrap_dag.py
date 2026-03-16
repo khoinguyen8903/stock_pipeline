@@ -31,7 +31,7 @@ def upload_to_gcs(df, file_name, destination_blob_name):
     if df.empty: return
     temp_path = f"/tmp/{file_name}"
     
-    # 1. ÉP KIỂU THỜI GIAN (Bắt buộc để làm Partition)
+    # 1. ÉP KIỂU THỜI GIAN
     df['time'] = pd.to_datetime(df['time'])
     df['ingestion_timestamp'] = pd.Timestamp.now(tz='UTC')
     
@@ -41,8 +41,14 @@ def upload_to_gcs(df, file_name, destination_blob_name):
         if col in df.columns:
             df[col] = df[col].astype(str)
             
-    # Ghi file Parquet với engine pyarrow để đảm bảo metadata chuẩn
-    df.to_parquet(temp_path, index=False, engine='pyarrow')
+    # 3. FIX LỖI NANOSECOND: Ép Parquet về Microsecond
+    df.to_parquet(
+        temp_path, 
+        index=False, 
+        engine='pyarrow',
+        coerce_timestamps='us',
+        allow_truncated_timestamps=True
+    )
     
     gcs_hook = GCSHook(gcp_conn_id=GCP_CONN_ID)
     gcs_hook.upload(bucket_name=GCS_BUCKET, object_name=destination_blob_name, filename=temp_path)
@@ -102,9 +108,8 @@ with DAG(
     t1 = PythonOperator(task_id='extract_daily', python_callable=fetch_historical_daily)
     t2 = PythonOperator(task_id='extract_1m', python_callable=fetch_historical_1m)
 
-    # KHAI BÁO SCHEMA ĐỒNG NHẤT VỚI LOGIC ÉP STRING BÊN TRÊN
     ELT_SCHEMA = [
-        {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'}, # Cột Partition
+        {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
         {'name': 'open', 'type': 'STRING', 'mode': 'NULLABLE'},
         {'name': 'high', 'type': 'STRING', 'mode': 'NULLABLE'},
         {'name': 'low', 'type': 'STRING', 'mode': 'NULLABLE'},
