@@ -24,9 +24,10 @@ services:
   postgres:
     image: postgres:13-alpine
     container_name: postgres
+    env_file:
+      - .env # HÚT BIẾN TỰ ĐỘNG TỪ FILE .ENV
     environment:
       - POSTGRES_USER=airflow
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD} 
       - POSTGRES_DB=airflow
     ports:
       - "5432:5432" 
@@ -56,14 +57,9 @@ services:
     depends_on:
       - postgres
       - kafka
+    env_file:
+      - .env # HÚT BIẾN TỰ ĐỘNG TỪ FILE .ENV
     environment:
-      # --- SẠCH BÓNG HARDCODE 100% ---
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - VNSTOCK_API_KEY=${VNSTOCK_API_KEY}
-      - TOPIC_NAME=${TOPIC_NAME}
-      - KAFKA_BROKER=${KAFKA_BROKER} 
-      # --------------------------------
-      
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:${POSTGRES_PASSWORD}@postgres/airflow
       - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
