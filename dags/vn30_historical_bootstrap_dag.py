@@ -31,7 +31,7 @@ def upload_to_gcs(df, file_name, destination_blob_name):
     if df.empty: return
     temp_path = f"/tmp/{file_name}"
     
-    # Ép kiểu DATETIME để BigQuery có thể Partition (Bắt buộc nếu muốn dùng Partition)
+    # Ép kiểu DATETIME để BigQuery có thể Partition
     df['time'] = pd.to_datetime(df['time'])
     df['symbol'] = df['symbol'].astype(str)
     df['ingestion_timestamp'] = pd.Timestamp.now(tz='UTC')
@@ -99,6 +99,19 @@ with DAG(
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_daily',
         source_format='PARQUET',
         write_disposition='WRITE_TRUNCATE',
+        # --- ĐÂY LÀ PHẦN SỬA LỖI QUAN TRỌNG ---
+        autodetect=False,
+        schema_fields=[
+            {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
+            {'name': 'open', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'high', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'low', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'close', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'volume', 'type': 'INTEGER', 'mode': 'NULLABLE'},
+            {'name': 'ticker', 'type': 'STRING', 'mode': 'NULLABLE'}, # Cột gốc của vnstock
+            {'name': 'symbol', 'type': 'STRING', 'mode': 'NULLABLE'}, # Cột bạn thêm vào
+            {'name': 'ingestion_timestamp', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'}
+        ],
         time_partitioning={"type": "DAY", "field": "time"},
         gcp_conn_id=GCP_CONN_ID,
     )
@@ -110,6 +123,19 @@ with DAG(
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_1m',
         source_format='PARQUET',
         write_disposition='WRITE_TRUNCATE',
+        # --- ĐÂY LÀ PHẦN SỬA LỖI QUAN TRỌNG ---
+        autodetect=False,
+        schema_fields=[
+            {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
+            {'name': 'open', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'high', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'low', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'close', 'type': 'FLOAT', 'mode': 'NULLABLE'},
+            {'name': 'volume', 'type': 'INTEGER', 'mode': 'NULLABLE'},
+            {'name': 'ticker', 'type': 'STRING', 'mode': 'NULLABLE'}, # Cột gốc của vnstock
+            {'name': 'symbol', 'type': 'STRING', 'mode': 'NULLABLE'}, # Cột bạn thêm vào
+            {'name': 'ingestion_timestamp', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'}
+        ],
         time_partitioning={"type": "MONTH", "field": "time"},
         gcp_conn_id=GCP_CONN_ID,
     )
