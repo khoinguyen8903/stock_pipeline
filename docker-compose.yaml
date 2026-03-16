@@ -1,10 +1,12 @@
+version: '3.8'
+
 services:
   # 1. Kafka (KRaft Mode)
   kafka:
     image: apache/kafka:3.7.0
     container_name: kafka
     ports:
-      - "127.0.0.1:9092:9092" 
+      - "127.0.0.1:9092:9092"
     environment:
       - KAFKA_NODE_ID=1
       - KAFKA_PROCESS_ROLES=broker,controller
@@ -25,12 +27,12 @@ services:
     image: postgres:13-alpine
     container_name: postgres
     env_file:
-      - .env # HÚT BIẾN TỰ ĐỘNG TỪ FILE .ENV
+      - .env
     environment:
       - POSTGRES_USER=airflow
       - POSTGRES_DB=airflow
     ports:
-      - "5432:5432" 
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     deploy:
@@ -43,7 +45,7 @@ services:
     image: redis:alpine
     container_name: redis
     ports:
-      - "127.0.0.1:6379:6379" 
+      - "127.0.0.1:6379:6379"
     deploy:
       resources:
         limits:
@@ -58,7 +60,7 @@ services:
       - postgres
       - kafka
     env_file:
-      - .env # HÚT BIẾN TỰ ĐỘNG TỪ FILE .ENV
+      - .env
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:${POSTGRES_PASSWORD}@postgres/airflow
@@ -66,20 +68,20 @@ services:
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
       - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
       - SPARK_HOME=/opt/spark
-      
-      # Tối ưu Scheduler cho VPS 8GB
+      # Tối ưu Scheduler cho máy tính
       - AIRFLOW__CORE__DAG_DIR_LIST_INTERVAL=60
       - AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL=30
       - AIRFLOW__CORE__PARALLELISM=32
       - AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG=16
       - AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT=300
-
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./data:/opt/airflow/data
+      # Mount file JSON Service Account vào để Airflow kết nối với Google Cloud
+      - ./google-credentials.json:/opt/airflow/google-credentials.json
     ports:
-      - "8080:8080" 
+      - "8080:8080"
     command: >
       bash -c "airflow db migrate && 
       airflow users create --username admin --password admin --firstname Khoi --lastname Nguyen --role Admin --email admin@example.com || true && 

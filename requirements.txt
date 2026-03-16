@@ -5,3 +5,8 @@ pandas
 vnstock3
 pydantic-settings
 psycopg2-binary
+vnstock
+pandas
+pyarrow
+fsspec
+google-cloud-storage

@@ -25,28 +25,30 @@ RUN curl -fsSL -o /opt/spark/jars/spark-sql-kafka-0-10_2.12-3.5.0.jar https://re
     curl -fsSL -o /opt/spark/jars/kafka-clients-3.4.1.jar https://repo1.maven.org/maven2/org/apache/kafka/kafka-clients/3.4.1/kafka-clients-3.4.1.jar && \
     curl -fsSL -o /opt/spark/jars/commons-pool2-2.12.0.jar https://repo1.maven.org/maven2/org/apache/commons/commons-pool2/2.12.0/commons-pool2-2.12.0.jar
 
-# 4. Thiết lập biến môi trường (QUAN TRỌNG: Sửa lỗi command not found)
+# 4. Thiết lập biến môi trường
 ENV SPARK_HOME=/opt/spark
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-# Thêm .local/bin vào PATH để tìm thấy lệnh airflow và pip packages
 ENV PATH="/home/airflow/.local/bin:${SPARK_HOME}/bin:${PATH}"
 
 USER airflow
 
-# 5. BƯỚC QUAN TRỌNG: Cài đặt tách biệt để tránh xung đột dependency
-
-# Bước 5a: Cài đặt các gói Provider của Airflow (Dùng constraints của Airflow để đảm bảo ổn định)
+# 5. Cài đặt tách biệt để tránh xung đột dependency
+# Bước 5a: Cài đặt các gói Provider của Airflow
 RUN pip install --no-cache-dir \
     "apache-airflow-providers-apache-spark" \
     "apache-airflow-providers-postgres" \
+    "apache-airflow-providers-google" \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.8.1/constraints-3.10.txt"
 
-# Bước 5b: Cài đặt các thư viện ngoài (Vnstock, Kafka...) KHÔNG DÙNG constraints
-# Việc tách ra này giúp vnstock tự do cài bản pendulum nó cần mà không bị Airflow chặn
+# Bước 5b: Cài đặt các thư viện ngoài cho DAGs và dbt
 RUN pip install --no-cache-dir \
     pyspark==3.5.0 \
     confluent-kafka \
     pandas \
-    vnstock3 \
+    vnstock \
+    pyarrow \
+    fsspec \
+    google-cloud-storage \
+    dbt-bigquery \
     pydantic-settings \
     psycopg2-binary
