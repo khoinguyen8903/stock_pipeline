@@ -8,12 +8,18 @@ from pyspark.sql.types import StructType, StructField, StringType, DoubleType, L
 KAFKA_BROKER = "kafka:29092"
 TOPIC = "stock_ticks_realtime"
 
+# --- LẤY MẬT KHẨU TỪ BIẾN MÔI TRƯỜNG ---
+db_password = os.environ.get("POSTGRES_PASSWORD")
+
+if not db_password:
+    raise ValueError("❌ CẢNH BÁO BẢO MẬT: Không tìm thấy biến môi trường POSTGRES_PASSWORD. Hãy kiểm tra lại Airflow DAG hoặc Docker env!")
+
 PG_CONFIG = {
     "host": "postgres",
     "port": 5432,
     "dbname": "airflow",
     "user": "airflow",
-    "password": "airflow",
+    "password": db_password, # Gán tự động ở đây
 }
 
 # Dùng /tmp để tránh lỗi Permission Denied
