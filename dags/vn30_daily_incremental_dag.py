@@ -31,10 +31,17 @@ default_args = {
 def upload_to_gcs(df, file_name, destination_blob_name):
     if df.empty: return
     temp_path = f"/tmp/{file_name}"
+    
+    # Ép kiểu tương tự file Bootstrap
     df['time'] = pd.to_datetime(df['time'])
-    df['symbol'] = df['symbol'].astype(str)
     df['ingestion_timestamp'] = pd.Timestamp.now(tz='UTC') 
-    df.to_parquet(temp_path, index=False)
+    
+    cols_to_string = ['open', 'high', 'low', 'close', 'volume', 'symbol', 'ticker']
+    for col in cols_to_string:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
+            
+    df.to_parquet(temp_path, index=False, engine='pyarrow')
     gcs_hook = GCSHook(gcp_conn_id=GCP_CONN_ID)
     gcs_hook.upload(bucket_name=GCS_BUCKET, object_name=destination_blob_name, filename=temp_path)
     os.remove(temp_path)
@@ -73,55 +80,47 @@ with DAG(
     schedule_interval='0 10 * * 1-5',
     start_date=datetime(2024, 3, 1),
     catchup=False,
-    tags=['stock', 'daily', 'bronze'],
+    tags=['stock', 'daily', 'bronze', 'elt'],
 ) as dag:
 
     t1 = PythonOperator(task_id='extract_today_daily', python_callable=fetch_today_daily)
     t2 = PythonOperator(task_id='extract_today_1m', python_callable=fetch_today_1m)
 
+    ELT_SCHEMA = [
+        {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
+        {'name': 'open', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'high', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'low', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'close', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'volume', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'ticker', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'symbol', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'ingestion_timestamp', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'}
+    ]
+
     t3 = GCSToBigQueryOperator(
-        task_id='load_daily_bq',
+        task_id='append_daily_bq',
         bucket=GCS_BUCKET,
-        source_objects=['bronze/historical_daily/*.parquet'],
+        source_objects=[f'bronze/daily_run/{TODAY_STR}_daily.parquet'],
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_daily',
         source_format='PARQUET',
-        write_disposition='WRITE_TRUNCATE',
-        # --- KHAI BÁO SCHEMA TƯỜNG MINH ---
-        autodetect=False, # Tắt tự động đoán
-        schema_fields=[
-            {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
-            {'name': 'symbol', 'type': 'STRING', 'mode': 'NULLABLE'},
-            {'name': 'open', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'high', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'low', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'close', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'volume', 'type': 'INTEGER', 'mode': 'NULLABLE'},
-            {'name': 'ingestion_timestamp', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
-        ],
-        time_partitioning={"type": "DAY", "field": "time"},
+        write_disposition='WRITE_APPEND', # DAG Daily thì dùng APPEND
+        autodetect=False,
+        schema_fields=ELT_SCHEMA,
+        schema_update_options=['ALLOW_FIELD_ADDITION'],
         gcp_conn_id=GCP_CONN_ID,
     )
 
     t4 = GCSToBigQueryOperator(
-        task_id='load_1m_bq',
+        task_id='append_1m_bq',
         bucket=GCS_BUCKET,
-        source_objects=['bronze/historical_1m/*.parquet'],
+        source_objects=[f'bronze/daily_run/{TODAY_STR}_1m.parquet'],
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_1m',
         source_format='PARQUET',
-        write_disposition='WRITE_TRUNCATE',
-        # Tương tự cho nến 1 phút
+        write_disposition='WRITE_APPEND',
         autodetect=False,
-        schema_fields=[
-            {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
-            {'name': 'symbol', 'type': 'STRING', 'mode': 'NULLABLE'},
-            {'name': 'open', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'high', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'low', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'close', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'volume', 'type': 'INTEGER', 'mode': 'NULLABLE'},
-            {'name': 'ingestion_timestamp', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
-        ],
-        time_partitioning={"type": "MONTH", "field": "time"},
+        schema_fields=ELT_SCHEMA,
+        schema_update_options=['ALLOW_FIELD_ADDITION'],
         gcp_conn_id=GCP_CONN_ID,
     )
 

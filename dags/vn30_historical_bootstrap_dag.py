@@ -31,17 +31,25 @@ def upload_to_gcs(df, file_name, destination_blob_name):
     if df.empty: return
     temp_path = f"/tmp/{file_name}"
     
-    # Ép kiểu DATETIME để BigQuery có thể Partition
+    # 1. ÉP KIỂU THỜI GIAN (Bắt buộc để làm Partition)
     df['time'] = pd.to_datetime(df['time'])
-    df['symbol'] = df['symbol'].astype(str)
     df['ingestion_timestamp'] = pd.Timestamp.now(tz='UTC')
     
-    df.to_parquet(temp_path, index=False)
+    # 2. TƯ DUY ELT CỦA BẠN: Ép tất cả các cột còn lại thành STRING
+    cols_to_string = ['open', 'high', 'low', 'close', 'volume', 'symbol', 'ticker']
+    for col in cols_to_string:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
+            
+    # Ghi file Parquet với engine pyarrow để đảm bảo metadata chuẩn
+    df.to_parquet(temp_path, index=False, engine='pyarrow')
+    
     gcs_hook = GCSHook(gcp_conn_id=GCP_CONN_ID)
     gcs_hook.upload(bucket_name=GCS_BUCKET, object_name=destination_blob_name, filename=temp_path)
     os.remove(temp_path)
 
 def fetch_historical_daily(**kwargs):
+    print("BẮT ĐẦU CÀO NẾN NGÀY (TỪ 2000)...")
     end_date = datetime.now().strftime('%Y-%m-%d')
     start_date = '2000-01-01'
     all_data = []
@@ -58,6 +66,7 @@ def fetch_historical_daily(**kwargs):
         upload_to_gcs(final_df, "historical_daily.parquet", "bronze/historical_daily/data.parquet")
 
 def fetch_historical_1m(**kwargs):
+    print("BẮT ĐẦU CÀO NẾN 1 PHÚT (3 THÁNG GẦN NHẤT)...")
     end_date_obj = datetime.now()
     start_date_obj = end_date_obj - relativedelta(months=3)
     all_data = []
@@ -80,17 +89,31 @@ def fetch_historical_1m(**kwargs):
         final_df = pd.concat(all_data, ignore_index=True)
         upload_to_gcs(final_df, "historical_1m.parquet", "bronze/historical_1m/data.parquet")
 
+# --- ĐỊNH NGHĨA DAG BOOTSTRAP ---
 with DAG(
     'vn30_historical_bootstrap',
     default_args=default_args,
     schedule_interval=None, 
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    tags=['stock', 'bootstrap', 'partition'],
+    tags=['stock', 'bootstrap', 'partition', 'elt'],
 ) as dag:
 
     t1 = PythonOperator(task_id='extract_daily', python_callable=fetch_historical_daily)
     t2 = PythonOperator(task_id='extract_1m', python_callable=fetch_historical_1m)
+
+    # KHAI BÁO SCHEMA ĐỒNG NHẤT VỚI LOGIC ÉP STRING BÊN TRÊN
+    ELT_SCHEMA = [
+        {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'}, # Cột Partition
+        {'name': 'open', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'high', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'low', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'close', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'volume', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'ticker', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'symbol', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'ingestion_timestamp', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'}
+    ]
 
     t3 = GCSToBigQueryOperator(
         task_id='load_daily_bq',
@@ -99,19 +122,8 @@ with DAG(
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_daily',
         source_format='PARQUET',
         write_disposition='WRITE_TRUNCATE',
-        # --- ĐÂY LÀ PHẦN SỬA LỖI QUAN TRỌNG ---
         autodetect=False,
-        schema_fields=[
-            {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
-            {'name': 'open', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'high', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'low', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'close', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'volume', 'type': 'INTEGER', 'mode': 'NULLABLE'},
-            {'name': 'ticker', 'type': 'STRING', 'mode': 'NULLABLE'}, # Cột gốc của vnstock
-            {'name': 'symbol', 'type': 'STRING', 'mode': 'NULLABLE'}, # Cột bạn thêm vào
-            {'name': 'ingestion_timestamp', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'}
-        ],
+        schema_fields=ELT_SCHEMA,
         time_partitioning={"type": "DAY", "field": "time"},
         gcp_conn_id=GCP_CONN_ID,
     )
@@ -123,19 +135,8 @@ with DAG(
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_1m',
         source_format='PARQUET',
         write_disposition='WRITE_TRUNCATE',
-        # --- ĐÂY LÀ PHẦN SỬA LỖI QUAN TRỌNG ---
         autodetect=False,
-        schema_fields=[
-            {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
-            {'name': 'open', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'high', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'low', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'close', 'type': 'FLOAT', 'mode': 'NULLABLE'},
-            {'name': 'volume', 'type': 'INTEGER', 'mode': 'NULLABLE'},
-            {'name': 'ticker', 'type': 'STRING', 'mode': 'NULLABLE'}, # Cột gốc của vnstock
-            {'name': 'symbol', 'type': 'STRING', 'mode': 'NULLABLE'}, # Cột bạn thêm vào
-            {'name': 'ingestion_timestamp', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'}
-        ],
+        schema_fields=ELT_SCHEMA,
         time_partitioning={"type": "MONTH", "field": "time"},
         gcp_conn_id=GCP_CONN_ID,
     )
