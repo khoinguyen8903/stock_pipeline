@@ -1,7 +1,7 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
-from airflow.providers.google.cloud.hooks.gcs import GCSHook # Thay thế cho thư viện gốc
+from airflow.providers.google.cloud.hooks.gcs import GCSHook
 from datetime import datetime, timedelta
 import pandas as pd
 import time
@@ -15,11 +15,11 @@ GCS_BUCKET = 'stock-datalake-raw-khoinguyen'
 BQ_DATASET = 'stock_data_warehouse'
 GCP_CONN_ID = 'google_cloud_default'
 
-# Rổ VN30
+# Rổ VN30 (Đã thêm SSI)
 VN30_TICKERS = [
     'ACB', 'BCM', 'BID', 'BVH', 'CTG', 'FPT', 'GAS', 'GVR', 'HDB', 'HPG', 
-    'MBB', 'MSN', 'MWG', 'PLX', 'POW', 'SAB', 'SHB', 'SSB', 'STB', 'SSI', 'TCB', 
-    'TPB', 'VCB', 'VHM', 'VIB', 'VIC', 'VJC', 'VNM', 'VPB', 'VRE'
+    'MBB', 'MSN', 'MWG', 'PLX', 'POW', 'SAB', 'SHB', 'SSI', 'SSB', 'STB', 
+    'TCB', 'TPB', 'VCB', 'VHM', 'VIB', 'VIC', 'VJC', 'VNM', 'VPB', 'VRE'
 ]
 
 default_args = {
@@ -36,11 +36,17 @@ def upload_to_gcs(df, file_name, destination_blob_name):
         return
     
     temp_path = f"/tmp/{file_name}"
-    # Ép kiểu rõ ràng cho cột symbol để Parquet không bị lỗi Type
+    
+    # 1. Ép kiểu chuẩn cho cột symbol
     df['symbol'] = df['symbol'].astype(str)
+    
+    # 2. THÊM CỘT TIMESTAMP (Đồng bộ với DAG Daily để tránh lỗi Schema)
+    df['ingestion_timestamp'] = pd.Timestamp.now(tz='UTC')
+    
+    # 3. Lưu file tạm
     df.to_parquet(temp_path, index=False)
     
-    # Dùng GCSHook thay cho storage.Client để kế thừa Connection của Airflow
+    # 4. Upload bằng GCSHook
     gcs_hook = GCSHook(gcp_conn_id=GCP_CONN_ID)
     gcs_hook.upload(
         bucket_name=GCS_BUCKET,
@@ -64,15 +70,13 @@ def fetch_historical_daily(**kwargs):
         try:
             df = stock_historical_data(symbol=ticker, start_date=start_date, end_date=end_date, resolution='1D', type='stock')
             if df is not None and not df.empty:
-                df['symbol'] = ticker # Thêm cột mã cổ phiếu
+                df['symbol'] = ticker
                 all_daily_data.append(df)
-            time.sleep(1) # Tránh bị chặn IP
+            time.sleep(1) 
         except Exception as e:
             print(f"Lỗi khi cào nến Ngày {ticker}: {e}")
             
-    # Safety Check: Tránh lỗi khi mảng data trống
     if not all_daily_data:
-        print("Không có dữ liệu nến ngày nào được cào. Dừng lại.")
         return
 
     final_df = pd.concat(all_daily_data, ignore_index=True)
@@ -110,9 +114,7 @@ def fetch_historical_1m(**kwargs):
             
             current_start = current_end + relativedelta(days=1)
             
-    # Safety Check: Tránh lỗi khi mảng data trống
     if not all_1m_data:
-        print("Không có dữ liệu nến 1p nào được cào. Dừng lại.")
         return
 
     final_df = pd.concat(all_1m_data, ignore_index=True)
@@ -122,7 +124,7 @@ def fetch_historical_1m(**kwargs):
 with DAG(
     'vn30_historical_bootstrap',
     default_args=default_args,
-    description='Chạy 1 lần: Nạp toàn bộ lịch sử VN30 vào Datalake & Data Warehouse',
+    description='Chạy 1 lần: Nạp toàn bộ lịch sử VN30 có Timestamp',
     schedule_interval=None, 
     start_date=datetime(2024, 1, 1),
     catchup=False,
@@ -140,7 +142,7 @@ with DAG(
         python_callable=fetch_historical_1m,
     )
 
-    # 2. Task load từ GCS vào BigQuery
+    # 2. Task load từ GCS vào BigQuery (Sử dụng WRITE_TRUNCATE để làm sạch bảng)
     task_load_daily_bq = GCSToBigQueryOperator(
         task_id='load_daily_to_bq',
         bucket=GCS_BUCKET,
