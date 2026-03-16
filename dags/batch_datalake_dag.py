@@ -18,33 +18,43 @@ default_args = {
 with DAG(
     dag_id='stock_batch_to_datalake',
     default_args=default_args,
-    description='Gom dữ liệu Kafka đẩy lên GCS, sau đó nạp vào BigQuery',
+    description='Gom Tick Data Kafka đẩy lên GCS, nạp vào BigQuery',
     schedule_interval='30 15 * * 1-5', 
     start_date=datetime(2026, 3, 1, tzinfo=local_tz),
     catchup=False,
-    tags=['batch', 'datalake', 'gcs', 'bigquery'],
+    tags=['batch', 'datalake', 'kafka', 'tick_data'],
 ) as dag:
 
-    # Task 1: Gom dữ liệu từ Kafka đẩy lên GCS (Giữ nguyên)
     run_kafka_to_gcs = BashOperator(
         task_id='extract_kafka_load_gcs',
         bash_command="python /opt/airflow/dags/scripts/kafka_to_gcs.py {{ data_interval_end.in_timezone('Asia/Ho_Chi_Minh').strftime('%Y/%m/%d') }}",
     )
 
-    # Task 2: Đẩy dữ liệu từ GCS nạp vào BigQuery
+    # ĐỊNH NGHĨA SCHEMA CỨNG CHO TICK DATA
+    TICK_SCHEMA = [
+        {'name': 'time', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
+        {'name': 'price', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'volume', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'match_type', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'id', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'ingested_at', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
+        {'name': 'symbol', 'type': 'STRING', 'mode': 'NULLABLE'},
+    ]
+
     load_gcs_to_bigquery = GCSToBigQueryOperator(
         task_id='load_gcs_to_bigquery',
         bucket='stock-datalake-raw-khoinguyen',
-        # Vẫn dùng Macro để lấy đúng thư mục của ngày đang chạy
         source_objects=["raw/{{ data_interval_end.in_timezone('Asia/Ho_Chi_Minh').strftime('%Y/%m/%d') }}/*.parquet"],
-        # CẤU HÌNH ĐÍCH ĐẾN: Tên Project . Tên Dataset . Tên Bảng
         destination_project_dataset_table='stock-lambda-project.stock_data_warehouse.stock_raw_daily',
         source_format='PARQUET',
-        write_disposition='WRITE_APPEND',      # Chạy mỗi ngày sẽ nối thêm dữ liệu vào dưới
-        create_disposition='CREATE_IF_NEEDED', # Nếu bảng chưa tồn tại thì tự động tạo mới
-        autodetect=True,                       # Tự động nhận diện cấu trúc cột từ file Parquet
-        # Mặc định Operator sẽ dùng connection 'google_cloud_default' mà ta vừa tạo ở Bước 2
+        write_disposition='WRITE_APPEND',      
+        
+        # --- CÁC CẤU HÌNH BẢO MẬT & TỐI ƯU ---
+        autodetect=False, # Tắt tự động nhận diện
+        schema_fields=TICK_SCHEMA, # Áp schema cứng
+        time_partitioning={"type": "DAY", "field": "time"}, # Lớp khiên 1: Cắt theo ngày
+        cluster_fields=['symbol'], # Lớp khiên 2: Gom cụm theo mã cổ phiếu
+        schema_update_options=['ALLOW_FIELD_ADDITION'],
     )
 
-    # Nối luồng chạy
     run_kafka_to_gcs >> load_gcs_to_bigquery
