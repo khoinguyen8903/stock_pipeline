@@ -1,21 +1,21 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
+from airflow.providers.google.cloud.hooks.gcs import GCSHook # Thay thế cho thư viện gốc
 from datetime import datetime, timedelta
 import pandas as pd
 import time
 import os
 from dateutil.relativedelta import relativedelta
 from vnstock import stock_historical_data
-from google.cloud import storage
 
-# --- CẤU HÌNH DỰ ÁN CỦA NGUYÊN ---
+# --- CẤU HÌNH DỰ ÁN ---
 PROJECT_ID = 'stock-lambda-project'
 GCS_BUCKET = 'stock-datalake-raw-khoinguyen'
 BQ_DATASET = 'stock_data_warehouse'
-GCP_CONN_ID = 'google_cloud_default' # Đảm bảo bạn đã setup connection này trong Airflow
+GCP_CONN_ID = 'google_cloud_default'
 
-# Rổ VN30 (Cập nhật chuẩn)
+# Rổ VN30
 VN30_TICKERS = [
     'ACB', 'BCM', 'BID', 'BVH', 'CTG', 'FPT', 'GAS', 'GVR', 'HDB', 'HPG', 
     'MBB', 'MSN', 'MWG', 'PLX', 'POW', 'SAB', 'SHB', 'SSB', 'STB', 'TCB', 
@@ -25,23 +25,28 @@ VN30_TICKERS = [
 default_args = {
     'owner': 'khoi_nguyen',
     'depends_on_past': False,
-    'retries': 3, # Cho phép thử lại 3 lần nếu mạng lỗi
+    'retries': 3, 
     'retry_delay': timedelta(minutes=5),
 }
 
 def upload_to_gcs(df, file_name, destination_blob_name):
-    """Hàm phụ trợ: Lưu DataFrame thành Parquet và đẩy lên GCS"""
+    """Hàm phụ trợ: Lưu DataFrame thành Parquet và đẩy lên GCS bằng Airflow Hook"""
     if df.empty:
         print(f"DataFrame rỗng, bỏ qua upload cho {destination_blob_name}")
         return
     
     temp_path = f"/tmp/{file_name}"
+    # Ép kiểu rõ ràng cho cột symbol để Parquet không bị lỗi Type
+    df['symbol'] = df['symbol'].astype(str)
     df.to_parquet(temp_path, index=False)
     
-    client = storage.Client(project=PROJECT_ID)
-    bucket = client.bucket(GCS_BUCKET)
-    blob = bucket.blob(destination_blob_name)
-    blob.upload_from_filename(temp_path)
+    # Dùng GCSHook thay cho storage.Client để kế thừa Connection của Airflow
+    gcs_hook = GCSHook(gcp_conn_id=GCP_CONN_ID)
+    gcs_hook.upload(
+        bucket_name=GCS_BUCKET,
+        object_name=destination_blob_name,
+        filename=temp_path
+    )
     
     os.remove(temp_path)
     print(f"Đã upload thành công: gs://{GCS_BUCKET}/{destination_blob_name}")
@@ -65,6 +70,11 @@ def fetch_historical_daily(**kwargs):
         except Exception as e:
             print(f"Lỗi khi cào nến Ngày {ticker}: {e}")
             
+    # Safety Check: Tránh lỗi khi mảng data trống
+    if not all_daily_data:
+        print("Không có dữ liệu nến ngày nào được cào. Dừng lại.")
+        return
+
     final_df = pd.concat(all_daily_data, ignore_index=True)
     upload_to_gcs(final_df, "historical_daily.parquet", "bronze/historical_daily/data.parquet")
 
@@ -80,7 +90,6 @@ def fetch_historical_1m(**kwargs):
         print(f"--- Đang xử lý nến 1p cho: {ticker} ---")
         current_start = start_date_obj
         
-        # Vòng lặp chia nhỏ (chunking): Cào từng 30 ngày một
         while current_start < end_date_obj:
             current_end = current_start + relativedelta(days=30)
             if current_end > end_date_obj:
@@ -95,12 +104,17 @@ def fetch_historical_1m(**kwargs):
                 if df is not None and not df.empty:
                     df['symbol'] = ticker
                     all_1m_data.append(df)
-                time.sleep(1.5) # Trễ lâu hơn một chút vì nến 1p rất nặng
+                time.sleep(1.5) 
             except Exception as e:
                 print(f"  -> Lỗi cào {ticker} ({str_start} - {str_end}): {e}")
             
             current_start = current_end + relativedelta(days=1)
             
+    # Safety Check: Tránh lỗi khi mảng data trống
+    if not all_1m_data:
+        print("Không có dữ liệu nến 1p nào được cào. Dừng lại.")
+        return
+
     final_df = pd.concat(all_1m_data, ignore_index=True)
     upload_to_gcs(final_df, "historical_1m.parquet", "bronze/historical_1m/data.parquet")
 
@@ -109,13 +123,13 @@ with DAG(
     'vn30_historical_bootstrap',
     default_args=default_args,
     description='Chạy 1 lần: Nạp toàn bộ lịch sử VN30 vào Datalake & Data Warehouse',
-    schedule_interval=None, # Chạy thủ công (Manual trigger)
+    schedule_interval=None, 
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=['stock', 'bootstrap', 'bronze'],
 ) as dag:
 
-    # 1. Các Task cào dữ liệu đẩy lên GCS
+    # 1. Task cào dữ liệu đẩy lên GCS
     task_extract_daily = PythonOperator(
         task_id='extract_daily_to_gcs',
         python_callable=fetch_historical_daily,
@@ -126,8 +140,7 @@ with DAG(
         python_callable=fetch_historical_1m,
     )
 
-    # 2. Các Task load từ GCS vào BigQuery
-    # Lưu ý: Dùng WRITE_TRUNCATE để nếu chạy lại DAG, nó sẽ xóa cục cũ đi nạp lại, không bị trùng
+    # 2. Task load từ GCS vào BigQuery
     task_load_daily_bq = GCSToBigQueryOperator(
         task_id='load_daily_to_bq',
         bucket=GCS_BUCKET,
@@ -151,6 +164,5 @@ with DAG(
     )
 
     # --- THỨ TỰ THỰC THI ---
-    # Chạy song song 2 luồng: Ngày và 1 Phút
     task_extract_daily >> task_load_daily_bq
     task_extract_1m >> task_load_1m_bq
