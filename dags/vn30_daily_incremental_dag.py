@@ -31,7 +31,7 @@ default_args = {
 def upload_to_gcs(df, file_name, destination_blob_name):
     if df.empty: return
     temp_path = f"/tmp/{file_name}"
-    df['time'] = pd.to_datetime(df['time']) # Đảm bảo kiểu datetime
+    df['time'] = pd.to_datetime(df['time'])
     df['symbol'] = df['symbol'].astype(str)
     df['ingestion_timestamp'] = pd.Timestamp.now(tz='UTC') 
     df.to_parquet(temp_path, index=False)
@@ -70,38 +70,34 @@ def fetch_today_1m(**kwargs):
 with DAG(
     'vn30_daily_incremental',
     default_args=default_args,
-    description='Daily Incremental: Append vào Partitioned Tables',
     schedule_interval='0 10 * * 1-5',
     start_date=datetime(2024, 3, 1),
     catchup=False,
     tags=['stock', 'daily', 'bronze'],
 ) as dag:
 
-    task_extract_daily = PythonOperator(task_id='extract_today_daily', python_callable=fetch_today_daily)
-    task_extract_1m = PythonOperator(task_id='extract_today_1m', python_callable=fetch_today_1m)
+    t1 = PythonOperator(task_id='extract_today_daily', python_callable=fetch_today_daily)
+    t2 = PythonOperator(task_id='extract_today_1m', python_callable=fetch_today_1m)
 
-    task_append_daily_bq = GCSToBigQueryOperator(
-        task_id='append_daily_to_bq',
+    t3 = GCSToBigQueryOperator(
+        task_id='append_daily_bq',
         bucket=GCS_BUCKET,
         source_objects=[f'bronze/daily_run/{TODAY_STR}_daily.parquet'],
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_daily',
         source_format='PARQUET',
         write_disposition='WRITE_APPEND',
-        # CHO PHÉP TỰ CẬP NHẬT CỘT MỚI NẾU CẦN
-        schema_update_options=['ALLOW_FIELD_ADDITION'],
         gcp_conn_id=GCP_CONN_ID,
     )
 
-    task_append_1m_bq = GCSToBigQueryOperator(
-        task_id='append_1m_to_bq',
+    t4 = GCSToBigQueryOperator(
+        task_id='append_1m_bq',
         bucket=GCS_BUCKET,
         source_objects=[f'bronze/daily_run/{TODAY_STR}_1m.parquet'],
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_1m',
         source_format='PARQUET',
         write_disposition='WRITE_APPEND',
-        schema_update_options=['ALLOW_FIELD_ADDITION'],
         gcp_conn_id=GCP_CONN_ID,
     )
 
-    task_extract_daily >> task_append_daily_bq
-    task_extract_1m >> task_append_1m_bq
+    t1 >> t3
+    t2 >> t4
