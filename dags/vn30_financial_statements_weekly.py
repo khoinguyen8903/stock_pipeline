@@ -7,10 +7,9 @@ import pandas as pd
 import time
 import os
 import logging
+import re
 
 # --- SỬA LẠI IMPORT THEO CHUẨN VNSTOCK 3 ---
-# Từ bản 3.x, thư viện đã gom về tên gọi chung. 
-# Nếu môi trường của bạn báo lỗi, hãy thử: from vnstock3 import Finance
 from vnstock import Finance
 
 PROJECT_ID = 'stock-lambda-project'
@@ -39,6 +38,11 @@ def upload_to_gcs(df, file_name, destination_blob_name):
         logging.warning("DataFrame rỗng, bỏ qua bước upload lên GCS.")
         return
         
+    # --- BƯỚC MỚI: CHUẨN HÓA TÊN CỘT CHO BIGQUERY ---
+    # Thay thế mọi ký tự không phải chữ/số (như khoảng trắng, ngoặc, chấm) thành dấu gạch dưới "_"
+    # Ví dụ: "Revenue (Bn. VND)" -> "Revenue__Bn__VND"
+    df.columns = df.columns.str.replace(r'\W+', '_', regex=True).str.strip('_')
+    
     temp_path = f"/tmp/{file_name}"
     
     # Ép thời gian lấy dữ liệu
@@ -71,13 +75,9 @@ def fetch_financial_statements(**kwargs):
             logging.info(f"Đang kéo BCTC của: {ticker}")
             
             # 1. KHỞI TẠO ĐÚNG CLASS FINANCE CỦA VNSTOCK 3
-            # source='VCI' thường ổn định hơn TCBS trong việc lấy BCTC
             finance = Finance(symbol=ticker, source='VCI')
             
             # 2. CHỌN LOẠI BÁO CÁO CẦN LẤY
-            # Ở đây mình ví dụ lấy Báo cáo kết quả hoạt động kinh doanh (Income Statement)
-            # Nếu bạn cần Bảng cân đối kế toán: finance.balance_sheet(period='quarter')
-            # Nếu bạn cần Lưu chuyển tiền tệ: finance.cash_flow(period='quarter')
             df_finance = finance.income_statement(period='quarter')
             
             if df_finance is not None and not df_finance.empty:
@@ -93,7 +93,6 @@ def fetch_financial_statements(**kwargs):
             failed_tickers.append(ticker)
             
     # 3. CHẶN LỖI NGẦM (SILENT FAILURE)
-    # Bắt buộc Airflow báo FAILED nếu có mã không kéo được, tránh ghi dữ liệu thiếu vào BigQuery
     if failed_tickers:
         raise RuntimeError(f"Task thất bại. Không thể kéo dữ liệu cho các mã: {failed_tickers}")
         
@@ -125,9 +124,8 @@ with DAG(
         source_objects=['bronze/financials/financial_statements.parquet'],
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_financial_statements',
         source_format='PARQUET',
-        write_disposition='WRITE_TRUNCATE', # CHIẾN THUẬT: Xóa sạch bảng cũ, ghi đè bảng mới
+        write_disposition='WRITE_TRUNCATE', # CHIẾN THUẬT: Xóa sạch bảng cũ, tạo bảng mới
         autodetect=True, 
-        # schema_update_options=['ALLOW_FIELD_ADDITION', 'ALLOW_FIELD_RELAXATION'],
         cluster_fields=['symbol'], 
         gcp_conn_id=GCP_CONN_ID,
     )
