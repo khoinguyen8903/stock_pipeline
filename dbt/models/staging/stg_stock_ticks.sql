@@ -11,7 +11,6 @@
 }}
 
 WITH source_data AS (
-    -- Dùng hàm {{ source() }} để dbt tự động trỏ đến bảng Bronze
     SELECT * FROM {{ source('bq_raw', 'stock_raw_daily') }}
 ),
 
