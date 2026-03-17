@@ -6,9 +6,12 @@ from datetime import datetime, timedelta
 import pandas as pd
 import time
 import os
+import logging
 
-# --- SỬA LẠI IMPORT THEO VNSTOCK3 ---
-from vnstock3 import Company
+# --- SỬA LẠI IMPORT THEO CHUẨN VNSTOCK 3 ---
+# Từ bản 3.x, thư viện đã gom về tên gọi chung. 
+# Nếu môi trường của bạn báo lỗi, hãy thử: from vnstock3 import Finance
+from vnstock import Finance
 
 PROJECT_ID = 'stock-lambda-project'
 GCS_BUCKET = 'stock-datalake-raw-khoinguyen'
@@ -32,7 +35,10 @@ default_args = {
 }
 
 def upload_to_gcs(df, file_name, destination_blob_name):
-    if df is None or df.empty: return
+    if df is None or df.empty: 
+        logging.warning("DataFrame rỗng, bỏ qua bước upload lên GCS.")
+        return
+        
     temp_path = f"/tmp/{file_name}"
     
     # Ép thời gian lấy dữ liệu
@@ -54,33 +60,49 @@ def upload_to_gcs(df, file_name, destination_blob_name):
     gcs_hook = GCSHook(gcp_conn_id=GCP_CONN_ID)
     gcs_hook.upload(bucket_name=GCS_BUCKET, object_name=destination_blob_name, filename=temp_path)
     os.remove(temp_path)
-    print(f"Đã upload {len(df)} dòng lên GCS: {destination_blob_name}")
+    logging.info(f"Đã upload {len(df)} dòng lên GCS: {destination_blob_name}")
 
 def fetch_financial_statements(**kwargs):
     all_data = []
+    failed_tickers = []
     
     for ticker in VN30_TICKERS:
         try:
-            print(f"Đang kéo BCTC của: {ticker}")
-            comp = Company(symbol=ticker)
+            logging.info(f"Đang kéo BCTC của: {ticker}")
             
-            # Kéo Báo cáo tài chính (Theo Quý). 
-            # Tùy API vnstock3, bạn có thể truyền is_all=True để lấy toàn bộ lịch sử
-            df_finance = comp.financial_statement(period='quarter', is_all=True)
+            # 1. KHỞI TẠO ĐÚNG CLASS FINANCE CỦA VNSTOCK 3
+            # source='VCI' thường ổn định hơn TCBS trong việc lấy BCTC
+            finance = Finance(symbol=ticker, source='VCI')
+            
+            # 2. CHỌN LOẠI BÁO CÁO CẦN LẤY
+            # Ở đây mình ví dụ lấy Báo cáo kết quả hoạt động kinh doanh (Income Statement)
+            # Nếu bạn cần Bảng cân đối kế toán: finance.balance_sheet(period='quarter')
+            # Nếu bạn cần Lưu chuyển tiền tệ: finance.cash_flow(period='quarter')
+            df_finance = finance.income_statement(period='quarter')
             
             if df_finance is not None and not df_finance.empty:
                 df_finance['symbol'] = ticker
                 all_data.append(df_finance)
+            else:
+                logging.warning(f"Cảnh báo: API trả về dữ liệu rỗng cho mã {ticker}")
                 
-            time.sleep(1.5) # Nghỉ ngơi để tránh bị TCBS chặn IP
+            time.sleep(1.5) # Nghỉ ngơi để tránh bị chặn IP
             
         except Exception as e: 
-            print(f"Lỗi khi kéo BCTC {ticker}: {e}")
+            logging.error(f"Lỗi khi kéo BCTC {ticker}: {e}")
+            failed_tickers.append(ticker)
             
+    # 3. CHẶN LỖI NGẦM (SILENT FAILURE)
+    # Bắt buộc Airflow báo FAILED nếu có mã không kéo được, tránh ghi dữ liệu thiếu vào BigQuery
+    if failed_tickers:
+        raise RuntimeError(f"Task thất bại. Không thể kéo dữ liệu cho các mã: {failed_tickers}")
+        
     if all_data:
         final_df = pd.concat(all_data, ignore_index=True)
         # Lưu vào một thư mục riêng biệt cho dữ liệu tĩnh
-        upload_to_gcs(final_df, "weekly_finance.parquet", f"bronze/financials/financial_statements.parquet")
+        upload_to_gcs(final_df, "weekly_finance.parquet", "bronze/financials/financial_statements.parquet")
+    else:
+        raise ValueError("Lỗi nghiêm trọng: Không có bất kỳ dữ liệu nào được kéo thành công.")
 
 with DAG(
     'vn30_financial_statements_weekly',
@@ -104,9 +126,9 @@ with DAG(
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_financial_statements',
         source_format='PARQUET',
         write_disposition='WRITE_TRUNCATE', # CHIẾN THUẬT: Xóa sạch bảng cũ, ghi đè bảng mới
-        autodetect=True, # Với BCTC có rất nhiều cột thay đổi, autodetect=True ở tầng Bronze là hợp lý
+        autodetect=True, 
         schema_update_options=['ALLOW_FIELD_ADDITION', 'ALLOW_FIELD_RELAXATION'],
-        cluster_fields=['symbol'], # KHÔNG có time_partitioning, CHỈ có cluster
+        cluster_fields=['symbol'], 
         gcp_conn_id=GCP_CONN_ID,
     )
 
