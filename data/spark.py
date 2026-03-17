@@ -6,16 +6,15 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, LongType
 from dotenv import load_dotenv
 
-# --- NẠP FILE .ENV (DÀNH CHO CHẠY LOCAL Ở MÁY TÍNH) ---
+# --- NẠP FILE .ENV ---
 load_dotenv()
 
-# --- LẤY CẤU HÌNH TỪ BIẾN MÔI TRƯỜNG ---
 KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "kafka:29092")
 TOPIC = os.environ.get("TOPIC_NAME", "stock_ticks_realtime")
 DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD")
 
 if not DB_PASSWORD:
-    raise ValueError("❌ CẢNH BÁO BẢO MẬT: Không tìm thấy POSTGRES_PASSWORD. Hãy kiểm tra lại file .env hoặc cấu hình Docker!")
+    raise ValueError("❌ CẢNH BÁO: Không tìm thấy POSTGRES_PASSWORD!")
 
 PG_CONFIG = {
     "host": "postgres",
@@ -25,10 +24,11 @@ PG_CONFIG = {
     "password": DB_PASSWORD,
 }
 
-# Dùng /tmp để tránh lỗi Permission Denied khi chạy trong Docker
 CHECKPOINT_DIR = "/tmp/spark_checkpoints"
 
+# BỔ SUNG CỘT "id" ĐỂ PHỤC VỤ DROP DUPLICATES
 TICK_SCHEMA = StructType([
+    StructField("id", StringType()),  # Thêm ID
     StructField("time", StringType()),
     StructField("price", DoubleType()),
     StructField("volume", LongType()),
@@ -88,7 +88,10 @@ def main():
             .appName("StockStreamingDocker")
             .master("local[*]") 
             .config("spark.driver.memory", "2g")
-            .config("spark.sql.shuffle.partitions", "2")
+            # TỐI ƯU 1: Đổi thành 3 để khớp với 3 Partitions của Kafka
+            .config("spark.sql.shuffle.partitions", "3") 
+            # TỐI ƯU 2: Cài đặt đúng múi giờ Việt Nam
+            .config("spark.sql.session.timeZone", "Asia/Ho_Chi_Minh") 
             .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1") 
             .getOrCreate()
         )
@@ -116,18 +119,21 @@ def main():
         return
 
     ticks = (
-            raw
-            .selectExpr("CAST(value AS STRING) AS json_str")
-            .select(F.from_json(F.col("json_str"), TICK_SCHEMA).alias("data"))
-            .select("data.*")
-            .filter(F.col("price").isNotNull())
-            # SỬA Ở ĐÂY: Dùng cột 'time' (thời gian giao dịch) thay vì 'ingested_at'
-            .withColumn("event_time", F.col("time").cast("timestamp"))
-        )
+        raw
+        .selectExpr("CAST(value AS STRING) AS json_str")
+        .select(F.from_json(F.col("json_str"), TICK_SCHEMA).alias("data"))
+        .select("data.*")
+        .filter(F.col("price").isNotNull())
+        .withColumn("event_time", F.col("time").cast("timestamp"))
+        
+        # TỐI ƯU 3: Đặt Watermark 2 phút và loại bỏ trùng lặp dựa trên ID giao dịch
+        .withWatermark("event_time", "2 minutes")
+        .dropDuplicates(["symbol", "id"]) 
+    )
 
     candles = (
         ticks
-        .withWatermark("event_time", "1 minute")
+        # Gom nhóm nến 1 phút dựa trên giờ Việt Nam chuẩn xác
         .groupBy(F.col("symbol"), F.window("event_time", "1 minute"))
         .agg(
             F.first("price").alias("open_price"),

@@ -5,14 +5,15 @@ import json
 import logging
 import signal
 import time
+import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, Set
+from typing import Any, Dict, Set, List
 
 import pandas as pd
 from confluent_kafka import KafkaError, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from vnstock3 import Vnstock # Lưu ý: vnstock3 là bản mới nhất hiện nay
+from vnstock3 import Vnstock 
 
 # --- BỔ SUNG: LỚP GIÁP BẢO VỆ MẠNG (CHỐNG LỖI 502 VÀ TIMEOUT) ---
 import requests
@@ -36,13 +37,17 @@ class Settings(BaseSettings):
     topic_name: str = "stock_ticks_realtime"
     
     symbols: str = "ACB,BCM,BID,BVH,CTG,FPT,GAS,GVR,HDB,HPG,MBB,MSN,MWG,PLX,POW,SAB,SHB,SSB,SSI,STB,TCB,TPB,VCB,VHM,VIB,VIC,VJC,VNM,VPB,VRE"
-    poll_interval_seconds: int = 5 
+    
+    # CẤU HÌNH SONG SONG & RATE LIMIT
+    num_threads: int = 3
+    num_partitions: int = 3
+    poll_interval_seconds: int = 0  # Không cần nghỉ thêm sau vòng lặp vì đã quản lý nghỉ theo Thread
     
     kafka_queue_buffering_max_messages: int = 200_000
     kafka_batch_num_messages: int = 1_000
     kafka_linger_ms: int = 100
     kafka_compression_type: str = "lz4"
-    kafka_acks: str = "1" # Tối ưu tốc độ cho realtime (chờ 1 broker xác nhận)
+    kafka_acks: str = "1" 
     kafka_retries: int = 5
     kafka_delivery_timeout_ms: int = 60_000
 
@@ -55,8 +60,8 @@ def ensure_topic_exists(settings: Settings):
     try:
         metadata = admin_client.list_topics(timeout=10)
         if topic_name not in metadata.topics:
-            logging.info(f"🛠️ Topic '{topic_name}' chưa tồn tại. Bắt đầu khởi tạo...")
-            new_topic = NewTopic(topic_name, num_partitions=1, replication_factor=1)
+            logging.info(f"🛠️ Topic '{topic_name}' chưa tồn tại. Bắt đầu tạo với {settings.num_partitions} partitions...")
+            new_topic = NewTopic(topic_name, num_partitions=settings.num_partitions, replication_factor=1)
             fs = admin_client.create_topics([new_topic])
             for topic, f in fs.items():
                 try:
@@ -111,32 +116,56 @@ class KafkaProducerClient:
         return self._producer.flush(timeout)
 
 
-# --- LOGIC LẤY DỮ LIỆU ---
+# --- LOGIC LẤY DỮ LIỆU ĐA LUỒNG ---
 class VnStockPoller:
     def __init__(self, settings: Settings, kafka_client: KafkaProducerClient) -> None:
         self._settings = settings
         self._kafka = kafka_client
         self._logger = logging.getLogger(self.__class__.__name__)
         self._running = True
+        
         self._symbol_list = [s.strip() for s in self._settings.symbols.split(',')]
         self._watermark: Dict[str, Any] = {s: None for s in self._symbol_list}
         self._processed_ids_cache: Dict[str, Set[str]] = {s: set() for s in self._symbol_list}
+        
+        self._threads: List[threading.Thread] = []
 
     def start(self) -> None:
-        self._logger.info(">>> Starting ingestion for %d symbols.", len(self._symbol_list))
+        num_threads = self._settings.num_threads
+        self._logger.info(f">>> Khởi động {num_threads} luồng quét an toàn cho {len(self._symbol_list)} mã (Rate limit: 60/min)...")
+        
+        # CHIA NHỎ DANH SÁCH MÃ CHỨNG KHOÁN CHO TỪNG LUỒNG
+        chunks = [self._symbol_list[i::num_threads] for i in range(num_threads)]
+        
+        for i, chunk in enumerate(chunks):
+            if not chunk: continue
+            t = threading.Thread(target=self._worker_loop, args=(i, chunk), name=f"PollerThread-{i}")
+            self._threads.append(t)
+            t.start()
+            
+        # Luồng chính duy trì hệ thống
         while self._running:
-            for sym in self._symbol_list:
+            time.sleep(1)
+
+    def _worker_loop(self, thread_id: int, symbols_chunk: List[str]):
+        """Vòng lặp riêng của từng luồng (Shipper)"""
+        self._logger.info(f"[Luồng {thread_id}] Phụ trách: {symbols_chunk}")
+        
+        # SO LE KHỞI ĐỘNG: Giúp 3 luồng không gửi request vào đúng một tích tắc
+        time.sleep(thread_id * 1.0) 
+        
+        while self._running:
+            for sym in symbols_chunk:
                 if not self._running: break
                 try:
                     self._process_symbol(sym)
                 except Exception as e:
-                    self._logger.error(f"Error processing {sym}: {e}")
+                    self._logger.error(f"[Luồng {thread_id}] Lỗi xử lý {sym}: {e}")
                 
+                # KHÓA RATE LIMIT: Bắt buộc nghỉ 3 giây sau mỗi mã
+                # Đảm bảo tổng 3 luồng chỉ bắn ra tối đa 1 request mỗi giây (60 rq/phút)
                 if self._running:
-                    time.sleep(1) # Điều tiết tránh bị API chặn
-            
-            if self._running:
-                time.sleep(self._settings.poll_interval_seconds)
+                    time.sleep(3) 
 
     def _process_symbol(self, sym: str):
         try:
@@ -154,21 +183,16 @@ class VnStockPoller:
             
             # CHIẾN LƯỢC LỌC THÔNG MINH
             if last_processed_time is not None:
-                # Lấy bản ghi từ thời điểm cuối trở đi
                 df_potential = df_data[df_data['time'] >= last_processed_time].copy()
                 
                 if not df_potential.empty:
                     target_cache = self._processed_ids_cache[sym]
                     
-                    # Tách làm 2 phần: phần có thể trùng (cùng giây) và phần chắc chắn mới
                     mask_overlap = df_potential['time'] == last_processed_time
                     df_overlap = df_potential[mask_overlap]
                     df_new_records = df_potential[df_potential['time'] > last_processed_time]
                     
-                    # Chỉ lọc ID cho phần có thể trùng
                     df_overlap_filtered = df_overlap[~df_overlap['id'].astype(str).isin(target_cache)]
-                    
-                    # Gộp lại
                     df_final = pd.concat([df_overlap_filtered, df_new_records])
                 else:
                     df_final = df_potential
@@ -185,15 +209,15 @@ class VnStockPoller:
                 record["symbol"] = sym
                 self._kafka.produce(
                     topic=self._settings.topic_name, 
+                    # QUAN TRỌNG: Key bằng 'sym' giúp Kafka đưa đúng mã vào đúng Partition
                     key=sym, 
                     value=json.dumps(record, default=str).encode("utf-8")
                 )
 
-            # CẬP NHẬT WATERMARK VÀ CACHE CHO LẦN QUÉT SAU
+            # CẬP NHẬT WATERMARK VÀ CACHE
             new_max_time = df_final['time'].max()
             self._watermark[sym] = new_max_time
             
-            # Cache ID của tất cả bản ghi thuộc giây cuối cùng này
             self._processed_ids_cache[sym] = {
                 str(r['id']) for r in records if r['time'] == new_max_time
             }
@@ -204,8 +228,11 @@ class VnStockPoller:
             self._logger.warning(f"Fetch error for {sym}: {e}")
 
     def stop(self) -> None:
-        self._logger.info("Stopping Poller...")
+        self._logger.info("Đang dừng hệ thống quét, chờ các luồng hoàn tất...")
         self._running = False
+        for t in self._threads:
+            if t.is_alive():
+                t.join()
 
 
 def main() -> None:
