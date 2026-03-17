@@ -127,7 +127,7 @@ with DAG(
         source_format='PARQUET',
         write_disposition='WRITE_TRUNCATE', # CHIẾN THUẬT: Xóa sạch bảng cũ, ghi đè bảng mới
         autodetect=True, 
-        schema_update_options=['ALLOW_FIELD_ADDITION', 'ALLOW_FIELD_RELAXATION'],
+        # schema_update_options=['ALLOW_FIELD_ADDITION', 'ALLOW_FIELD_RELAXATION'],
         cluster_fields=['symbol'], 
         gcp_conn_id=GCP_CONN_ID,
     )
