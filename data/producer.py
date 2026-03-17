@@ -6,11 +6,11 @@ import logging
 import signal
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 import pandas as pd
 from confluent_kafka import KafkaError, Producer
-from confluent_kafka.admin import AdminClient, NewTopic  # BỔ SUNG: Thư viện quản lý Kafka
+from confluent_kafka.admin import AdminClient, NewTopic
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from vnstock import Vnstock
 
@@ -21,14 +21,12 @@ from urllib3.util.retry import Retry
 import vnstock.core.utils.client as vn_client
 
 session = requests.Session()
-# Tự động gọi lại tối đa 3 lần nếu gặp lỗi mạng, mỗi lần cách nhau 0.5s, 1s, 2s...
 retry = Retry(connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
 adapter = HTTPAdapter(max_retries=retry)
 session.mount('http://', adapter)
 session.mount('https://', adapter)
-vn_client.session = session # Ghi đè cấu hình mạng mặc định của vnstock
+vn_client.session = session 
 # -----------------------------------------------------------------
-
 
 # --- CẤU HÌNH ---
 class Settings(BaseSettings):
@@ -38,7 +36,8 @@ class Settings(BaseSettings):
     topic_name: str = "stock_ticks_realtime"
     
     symbols: str = "ACB,BCM,BID,BVH,CTG,FPT,GAS,GVR,HDB,HPG,MBB,MSN,MWG,PLX,POW,SAB,SHB,SSB,SSI,STB,TCB,TPB,VCB,VHM,VIB,VIC,VJC,VNM,VPB,VRE"
-    poll_interval_seconds: int = 15
+    # poll_interval_seconds sẽ là thời gian nghỉ sau khi quét XONG 1 vòng 30 mã
+    poll_interval_seconds: int = 5 
     
     kafka_queue_buffering_max_messages: int = 200_000
     kafka_batch_num_messages: int = 1_000
@@ -49,20 +48,17 @@ class Settings(BaseSettings):
     kafka_delivery_timeout_ms: int = 60_000
 
 
-# --- HÀM KHAI SINH TOPIC TỪ ĐẦU ---
+# --- HÀM KHAI SINH TOPIC ---
 def ensure_topic_exists(settings: Settings):
     admin_client = AdminClient({'bootstrap.servers': settings.kafka_broker})
     topic_name = settings.topic_name
-
     logging.info(f"🔍 Kiểm tra sự tồn tại của Topic: '{topic_name}'...")
     try:
         metadata = admin_client.list_topics(timeout=10)
         if topic_name not in metadata.topics:
             logging.info(f"🛠️ Topic '{topic_name}' chưa tồn tại. Bắt đầu khởi tạo...")
-            # Tạo topic mới với 1 partition và 1 replica
             new_topic = NewTopic(topic_name, num_partitions=1, replication_factor=1)
             fs = admin_client.create_topics([new_topic])
-            
             for topic, f in fs.items():
                 try:
                     f.result() 
@@ -70,7 +66,7 @@ def ensure_topic_exists(settings: Settings):
                 except Exception as e:
                     logging.error(f"❌ Lỗi khi tạo topic {topic}: {e}")
         else:
-            logging.info(f"✅ Topic '{topic_name}' đã tồn tại. Bỏ qua bước tạo.")
+            logging.info(f"✅ Topic '{topic_name}' đã tồn tại.")
     except Exception as e:
         logging.error(f"❌ Lỗi kết nối Kafka Admin: {e}")
 
@@ -112,7 +108,7 @@ class KafkaProducerClient:
             self._producer.produce(topic=topic, key=key, value=value, callback=self._delivery_callback)
 
     def flush(self, timeout: float = 10.0) -> int:
-        self._logger.info("Flushing...")
+        self._logger.info("Flushing Kafka...")
         return self._producer.flush(timeout)
 
 
@@ -125,44 +121,60 @@ class VnStockPoller:
         self._running = True
         self._symbol_list = [s.strip() for s in self._settings.symbols.split(',')]
         self._watermark: Dict[str, Any] = {s: None for s in self._symbol_list}
+        
+        # BỔ SUNG: Cache để lưu các ID đã đẩy vào Kafka của giây cuối cùng (để chống trùng khi dùng >=)
+        self._processed_ids_cache: Dict[str, Set[str]] = {s: set() for s in self._symbol_list}
 
     def start(self) -> None:
-        self._logger.info(">>> Starting ingestion for: %s", self._symbol_list)
+        self._logger.info(">>> Starting ingestion for %d symbols. Rate limit: ~60req/min", len(self._symbol_list))
         while self._running:
             for sym in self._symbol_list:
                 if not self._running: break
                 try:
                     self._process_symbol(sym)
                 except Exception as e:
-                    self._logger.error(f"Error {sym}: {e}")
+                    self._logger.error(f"Error processing {sym}: {e}")
                 
+                # ĐIỀU TIẾT: Nghỉ 1s giữa mỗi mã. Với 30 mã, đi hết 1 vòng mất 30s.
+                # Tổng cộng ~60 requests/phút, vừa khít hạn mức của bạn.
                 if self._running:
                     time.sleep(1)
             
+            # Nghỉ thêm một chút sau khi xong 1 vòng nếu cần
             if self._running:
                 time.sleep(self._settings.poll_interval_seconds)
 
     def _process_symbol(self, sym: str):
         try:
+            # Tăng page_size lên 2000 để bao phủ tốt hơn nếu thị trường biến động mạnh
             stock_client = Vnstock().stock(symbol=sym, source='VCI')
-            df_data = stock_client.quote.intraday(page_size=1000)
+            df_data = stock_client.quote.intraday(page_size=2000)
 
-            if df_data is None or df_data.empty: return
+            if df_data is None or df_data.empty:
+                return
 
             if 'time' in df_data.columns:
                 df_data['time'] = pd.to_datetime(df_data['time'])
                 df_data = df_data.sort_values(by='time')
             
-            last_processed_time = self._watermark.get(sym, None)
+            last_processed_time = self._watermark.get(sym)
+            
+            # SỬA LỖI: Dùng >= để không bỏ sót các lệnh cùng timestamp phát sinh sau
             if last_processed_time is not None:
-                df_new = df_data[df_data['time'] > last_processed_time]
+                df_new = df_data[df_data['time'] >= last_processed_time].copy()
+                
+                # Lọc bỏ những ID đã được đẩy đi ở lần quét trước dựa vào Cache
+                if not df_new.empty and 'id' in df_new.columns:
+                    target_cache = self._processed_ids_cache[sym]
+                    df_new = df_new[~df_new['id'].astype(str).isin(target_cache)]
             else:
                 df_new = df_data
 
-            if df_new.empty: return
+            if df_new.empty:
+                return
 
+            # Đẩy dữ liệu mới vào Kafka
             records = df_new.to_dict(orient="records")
-            count = 0
             for record in records:
                 record["ingested_at"] = datetime.now(timezone.utc).isoformat()
                 record["symbol"] = sym
@@ -171,16 +183,24 @@ class VnStockPoller:
                     key=sym, 
                     value=json.dumps(record, default=str).encode("utf-8")
                 )
-                count += 1
 
-            self._watermark[sym] = df_new['time'].max()
-            self._logger.info(f"[{sym}] Pushed {count} NEW records. Last time: {self._watermark[sym]}")
+            # CẬP NHẬT WATERMARK VÀ CACHE
+            new_max_time = df_new['time'].max()
+            self._watermark[sym] = new_max_time
+            
+            # Cập nhật cache: Chỉ lưu ID của những bản ghi có timestamp bằng timestamp lớn nhất
+            # Điều này giúp chống trùng cho lần quét tới mà không tốn RAM lưu cả ngày.
+            self._processed_ids_cache[sym] = {
+                str(r['id']) for r in records if r['time'] == new_max_time
+            }
+
+            self._logger.info(f"[{sym}] Pushed {len(records)} NEW records. Watermark: {new_max_time}")
 
         except Exception as e:
-            self._logger.warning(f"Fetch error {sym}: {e}")
+            self._logger.warning(f"Fetch error for {sym}: {e}")
 
     def stop(self) -> None:
-        self._logger.info("Stopping...")
+        self._logger.info("Stopping Poller...")
         self._running = False
 
 
@@ -188,18 +208,11 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
     settings = Settings()
 
-    api_key = os.environ.get("VNSTOCK_API_KEY")
-    if api_key:
-        logging.info("Đã nhận diện VNSTOCK_API_KEY từ biến môi trường Docker.")
+    if os.environ.get("VNSTOCK_API_KEY"):
+        logging.info("VNSTOCK_API_KEY detected.")
     else:
-        logging.warning("KHÔNG TÌM THẤY API KEY! Hệ thống sẽ chạy với quyền Guest.")
+        logging.warning("API KEY not found! Running as Guest.")
 
-    try:
-        os.chdir("/tmp")
-    except:
-        pass
-
-    # BƯỚC QUAN TRỌNG: GỌI HÀM KHAI SINH TOPIC TRƯỚC KHI CHẠY POLLER
     ensure_topic_exists(settings)
 
     client = KafkaProducerClient(settings)
