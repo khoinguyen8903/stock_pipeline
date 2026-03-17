@@ -116,13 +116,14 @@ def main():
         return
 
     ticks = (
-        raw
-        .selectExpr("CAST(value AS STRING) AS json_str")
-        .select(F.from_json(F.col("json_str"), TICK_SCHEMA).alias("data"))
-        .select("data.*")
-        .filter(F.col("price").isNotNull())
-        .withColumn("event_time", F.col("ingested_at").cast("timestamp"))
-    )
+            raw
+            .selectExpr("CAST(value AS STRING) AS json_str")
+            .select(F.from_json(F.col("json_str"), TICK_SCHEMA).alias("data"))
+            .select("data.*")
+            .filter(F.col("price").isNotNull())
+            # SỬA Ở ĐÂY: Dùng cột 'time' (thời gian giao dịch) thay vì 'ingested_at'
+            .withColumn("event_time", F.col("time").cast("timestamp"))
+        )
 
     candles = (
         ticks
