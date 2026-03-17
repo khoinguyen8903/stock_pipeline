@@ -21,3 +21,5 @@ venv/
 # CHẮC CHẮN BỎ QUA FILE KEY GCP TRONG THƯ MỤC DATA
 data/gcpkey.json
 data/*.json
+# Ignore dbt profiles with credentials
+dbt/profiles.yml
