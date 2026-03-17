@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: bq_raw # Đặt tên bí danh cho nguồn dữ liệu
+    database: stock-lambda-project # Tên Project ID trên GCP của bạn
+    schema: stock_data_warehouse # Tên Dataset chứa bảng Bronze
+    tables:
+      - name: stock_raw_daily
+        description: "Bảng Bronze chứa dữ liệu tick realtime từ Kafka"
+      - name: dim_company
+      - name: bronze_historical_daily
+      - name: bronze_historical_1m
+      - name: bronze_financial_statements
