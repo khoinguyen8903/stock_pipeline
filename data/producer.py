@@ -12,13 +12,13 @@ import pandas as pd
 from confluent_kafka import KafkaError, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from vnstock import Vnstock
+from vnstock3 import Vnstock # Lưu ý: vnstock3 là bản mới nhất hiện nay
 
 # --- BỔ SUNG: LỚP GIÁP BẢO VỆ MẠNG (CHỐNG LỖI 502 VÀ TIMEOUT) ---
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-import vnstock.core.utils.client as vn_client
+import vnstock3.core.utils.client as vn_client
 
 session = requests.Session()
 retry = Retry(connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
@@ -36,14 +36,13 @@ class Settings(BaseSettings):
     topic_name: str = "stock_ticks_realtime"
     
     symbols: str = "ACB,BCM,BID,BVH,CTG,FPT,GAS,GVR,HDB,HPG,MBB,MSN,MWG,PLX,POW,SAB,SHB,SSB,SSI,STB,TCB,TPB,VCB,VHM,VIB,VIC,VJC,VNM,VPB,VRE"
-    # poll_interval_seconds sẽ là thời gian nghỉ sau khi quét XONG 1 vòng 30 mã
     poll_interval_seconds: int = 5 
     
     kafka_queue_buffering_max_messages: int = 200_000
     kafka_batch_num_messages: int = 1_000
     kafka_linger_ms: int = 100
     kafka_compression_type: str = "lz4"
-    kafka_acks: str = "all"
+    kafka_acks: str = "1" # Tối ưu tốc độ cho realtime (chờ 1 broker xác nhận)
     kafka_retries: int = 5
     kafka_delivery_timeout_ms: int = 60_000
 
@@ -121,12 +120,10 @@ class VnStockPoller:
         self._running = True
         self._symbol_list = [s.strip() for s in self._settings.symbols.split(',')]
         self._watermark: Dict[str, Any] = {s: None for s in self._symbol_list}
-        
-        # BỔ SUNG: Cache để lưu các ID đã đẩy vào Kafka của giây cuối cùng (để chống trùng khi dùng >=)
         self._processed_ids_cache: Dict[str, Set[str]] = {s: set() for s in self._symbol_list}
 
     def start(self) -> None:
-        self._logger.info(">>> Starting ingestion for %d symbols. Rate limit: ~60req/min", len(self._symbol_list))
+        self._logger.info(">>> Starting ingestion for %d symbols.", len(self._symbol_list))
         while self._running:
             for sym in self._symbol_list:
                 if not self._running: break
@@ -135,18 +132,14 @@ class VnStockPoller:
                 except Exception as e:
                     self._logger.error(f"Error processing {sym}: {e}")
                 
-                # ĐIỀU TIẾT: Nghỉ 1s giữa mỗi mã. Với 30 mã, đi hết 1 vòng mất 30s.
-                # Tổng cộng ~60 requests/phút, vừa khít hạn mức của bạn.
                 if self._running:
-                    time.sleep(1)
+                    time.sleep(1) # Điều tiết tránh bị API chặn
             
-            # Nghỉ thêm một chút sau khi xong 1 vòng nếu cần
             if self._running:
                 time.sleep(self._settings.poll_interval_seconds)
 
     def _process_symbol(self, sym: str):
         try:
-            # Tăng page_size lên 2000 để bao phủ tốt hơn nếu thị trường biến động mạnh
             stock_client = Vnstock().stock(symbol=sym, source='VCI')
             df_data = stock_client.quote.intraday(page_size=2000)
 
@@ -155,26 +148,38 @@ class VnStockPoller:
 
             if 'time' in df_data.columns:
                 df_data['time'] = pd.to_datetime(df_data['time'])
-                df_data = df_data.sort_values(by='time')
+                df_data = df_data.sort_values(by=['time', 'id'])
             
             last_processed_time = self._watermark.get(sym)
             
-            # SỬA LỖI: Dùng >= để không bỏ sót các lệnh cùng timestamp phát sinh sau
+            # CHIẾN LƯỢC LỌC THÔNG MINH
             if last_processed_time is not None:
-                df_new = df_data[df_data['time'] >= last_processed_time].copy()
+                # Lấy bản ghi từ thời điểm cuối trở đi
+                df_potential = df_data[df_data['time'] >= last_processed_time].copy()
                 
-                # Lọc bỏ những ID đã được đẩy đi ở lần quét trước dựa vào Cache
-                if not df_new.empty and 'id' in df_new.columns:
+                if not df_potential.empty:
                     target_cache = self._processed_ids_cache[sym]
-                    df_new = df_new[~df_new['id'].astype(str).isin(target_cache)]
+                    
+                    # Tách làm 2 phần: phần có thể trùng (cùng giây) và phần chắc chắn mới
+                    mask_overlap = df_potential['time'] == last_processed_time
+                    df_overlap = df_potential[mask_overlap]
+                    df_new_records = df_potential[df_potential['time'] > last_processed_time]
+                    
+                    # Chỉ lọc ID cho phần có thể trùng
+                    df_overlap_filtered = df_overlap[~df_overlap['id'].astype(str).isin(target_cache)]
+                    
+                    # Gộp lại
+                    df_final = pd.concat([df_overlap_filtered, df_new_records])
+                else:
+                    df_final = df_potential
             else:
-                df_new = df_data
+                df_final = df_data
 
-            if df_new.empty:
+            if df_final.empty:
                 return
 
-            # Đẩy dữ liệu mới vào Kafka
-            records = df_new.to_dict(orient="records")
+            # Đẩy vào Kafka
+            records = df_final.to_dict(orient="records")
             for record in records:
                 record["ingested_at"] = datetime.now(timezone.utc).isoformat()
                 record["symbol"] = sym
@@ -184,17 +189,16 @@ class VnStockPoller:
                     value=json.dumps(record, default=str).encode("utf-8")
                 )
 
-            # CẬP NHẬT WATERMARK VÀ CACHE
-            new_max_time = df_new['time'].max()
+            # CẬP NHẬT WATERMARK VÀ CACHE CHO LẦN QUÉT SAU
+            new_max_time = df_final['time'].max()
             self._watermark[sym] = new_max_time
             
-            # Cập nhật cache: Chỉ lưu ID của những bản ghi có timestamp bằng timestamp lớn nhất
-            # Điều này giúp chống trùng cho lần quét tới mà không tốn RAM lưu cả ngày.
+            # Cache ID của tất cả bản ghi thuộc giây cuối cùng này
             self._processed_ids_cache[sym] = {
                 str(r['id']) for r in records if r['time'] == new_max_time
             }
 
-            self._logger.info(f"[{sym}] Pushed {len(records)} NEW records. Watermark: {new_max_time}")
+            self._logger.info(f"[{sym}] Pushed {len(records)} records. Watermark: {new_max_time}")
 
         except Exception as e:
             self._logger.warning(f"Fetch error for {sym}: {e}")
@@ -207,12 +211,6 @@ class VnStockPoller:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
     settings = Settings()
-
-    if os.environ.get("VNSTOCK_API_KEY"):
-        logging.info("VNSTOCK_API_KEY detected.")
-    else:
-        logging.warning("API KEY not found! Running as Guest.")
-
     ensure_topic_exists(settings)
 
     client = KafkaProducerClient(settings)
