@@ -1,0 +1,113 @@
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
+from airflow.providers.google.cloud.hooks.gcs import GCSHook
+from datetime import datetime, timedelta
+import pandas as pd
+import time
+import os
+
+# --- SỬA LẠI IMPORT THEO VNSTOCK3 ---
+from vnstock3 import Company
+
+PROJECT_ID = 'stock-lambda-project'
+GCS_BUCKET = 'stock-datalake-raw-khoinguyen'
+BQ_DATASET = 'stock_data_warehouse'
+GCP_CONN_ID = 'google_cloud_default'
+
+VN30_TICKERS = [
+    'ACB', 'BCM', 'BID', 'BVH', 'CTG', 'FPT', 'GAS', 'GVR', 'HDB', 'HPG', 
+    'MBB', 'MSN', 'MWG', 'PLX', 'POW', 'SAB', 'SHB', 'SSI', 'SSB', 'STB', 
+    'TCB', 'TPB', 'VCB', 'VHM', 'VIB', 'VIC', 'VJC', 'VNM', 'VPB', 'VRE'
+]
+
+# DAG chạy hàng tuần, lấy ngày chủ nhật làm tên file
+RUN_DATE_STR = datetime.now().strftime('%Y-%m-%d')
+
+default_args = {
+    'owner': 'khoi_nguyen',
+    'depends_on_past': False,
+    'retries': 2,
+    'retry_delay': timedelta(minutes=3),
+}
+
+def upload_to_gcs(df, file_name, destination_blob_name):
+    if df is None or df.empty: return
+    temp_path = f"/tmp/{file_name}"
+    
+    # Ép thời gian lấy dữ liệu
+    df['ingestion_timestamp'] = pd.Timestamp.now(tz='UTC') 
+    
+    # TƯ DUY ELT: Ép toàn bộ các cột (trừ ingestion_timestamp) sang STRING
+    for col in df.columns:
+        if col != 'ingestion_timestamp':
+            df[col] = df[col].astype(str)
+            
+    df.to_parquet(
+        temp_path, 
+        index=False, 
+        engine='pyarrow',
+        coerce_timestamps='us',
+        allow_truncated_timestamps=True
+    )
+    
+    gcs_hook = GCSHook(gcp_conn_id=GCP_CONN_ID)
+    gcs_hook.upload(bucket_name=GCS_BUCKET, object_name=destination_blob_name, filename=temp_path)
+    os.remove(temp_path)
+    print(f"Đã upload {len(df)} dòng lên GCS: {destination_blob_name}")
+
+def fetch_financial_statements(**kwargs):
+    all_data = []
+    
+    for ticker in VN30_TICKERS:
+        try:
+            print(f"Đang kéo BCTC của: {ticker}")
+            comp = Company(symbol=ticker)
+            
+            # Kéo Báo cáo tài chính (Theo Quý). 
+            # Tùy API vnstock3, bạn có thể truyền is_all=True để lấy toàn bộ lịch sử
+            df_finance = comp.financial_statement(period='quarter', is_all=True)
+            
+            if df_finance is not None and not df_finance.empty:
+                df_finance['symbol'] = ticker
+                all_data.append(df_finance)
+                
+            time.sleep(1.5) # Nghỉ ngơi để tránh bị TCBS chặn IP
+            
+        except Exception as e: 
+            print(f"Lỗi khi kéo BCTC {ticker}: {e}")
+            
+    if all_data:
+        final_df = pd.concat(all_data, ignore_index=True)
+        # Lưu vào một thư mục riêng biệt cho dữ liệu tĩnh
+        upload_to_gcs(final_df, "weekly_finance.parquet", f"bronze/financials/financial_statements.parquet")
+
+with DAG(
+    'vn30_financial_statements_weekly',
+    default_args=default_args,
+    description='Kéo BCTC toàn bộ lịch sử mỗi tuần 1 lần',
+    schedule_interval='0 6 * * 0', # 6h sáng mỗi Chủ Nhật
+    start_date=datetime(2024, 3, 1),
+    catchup=False,
+    tags=['stock', 'weekly', 'financials', 'bronze', 'elt'],
+) as dag:
+
+    extract_finance = PythonOperator(
+        task_id='extract_financial_statements', 
+        python_callable=fetch_financial_statements
+    )
+
+    load_bq = GCSToBigQueryOperator(
+        task_id='load_finance_bq',
+        bucket=GCS_BUCKET,
+        source_objects=['bronze/financials/financial_statements.parquet'],
+        destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_financial_statements',
+        source_format='PARQUET',
+        write_disposition='WRITE_TRUNCATE', # CHIẾN THUẬT: Xóa sạch bảng cũ, ghi đè bảng mới
+        autodetect=True, # Với BCTC có rất nhiều cột thay đổi, autodetect=True ở tầng Bronze là hợp lý
+        schema_update_options=['ALLOW_FIELD_ADDITION', 'ALLOW_FIELD_RELAXATION'],
+        cluster_fields=['symbol'], # KHÔNG có time_partitioning, CHỈ có cluster
+        gcp_conn_id=GCP_CONN_ID,
+    )
+
+    extract_finance >> load_bq
