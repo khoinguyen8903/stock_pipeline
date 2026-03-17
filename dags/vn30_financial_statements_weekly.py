@@ -38,11 +38,6 @@ def upload_to_gcs(df, file_name, destination_blob_name):
         logging.warning("DataFrame rỗng, bỏ qua bước upload lên GCS.")
         return
         
-    # --- BƯỚC MỚI: CHUẨN HÓA TÊN CỘT CHO BIGQUERY ---
-    # Thay thế mọi ký tự không phải chữ/số (như khoảng trắng, ngoặc, chấm) thành dấu gạch dưới "_"
-    # Ví dụ: "Revenue (Bn. VND)" -> "Revenue__Bn__VND"
-    df.columns = df.columns.str.replace(r'\W+', '_', regex=True).str.strip('_')
-    
     temp_path = f"/tmp/{file_name}"
     
     # Ép thời gian lấy dữ liệu
@@ -98,7 +93,18 @@ def fetch_financial_statements(**kwargs):
         
     if all_data:
         final_df = pd.concat(all_data, ignore_index=True)
-        # Lưu vào một thư mục riêng biệt cho dữ liệu tĩnh
+        
+        # --- BƯỚC MỚI: XỬ LÝ TRÙNG TÊN CỘT TRƯỚC KHI GHI PARQUET ---
+        # 1. Chạy Regex chuẩn hóa tên cột để tương thích với BigQuery
+        final_df.columns = final_df.columns.str.replace(r'\W+', '_', regex=True).str.strip('_')
+        
+        # 2. Kiểm tra và loại bỏ các cột trùng lặp (giữ lại cột đầu tiên)
+        duplicate_columns = final_df.columns[final_df.columns.duplicated()].tolist()
+        if duplicate_columns:
+            logging.warning(f"Phát hiện và loại bỏ các cột bị trùng tên: {set(duplicate_columns)}")
+            final_df = final_df.loc[:, ~final_df.columns.duplicated()]
+        
+        # Gọi hàm upload
         upload_to_gcs(final_df, "weekly_finance.parquet", "bronze/financials/financial_statements.parquet")
     else:
         raise ValueError("Lỗi nghiêm trọng: Không có bất kỳ dữ liệu nào được kéo thành công.")
