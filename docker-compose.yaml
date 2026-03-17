@@ -81,7 +81,7 @@ services:
       - ./logs:/opt/airflow/logs
       - ./data:/opt/airflow/data
       # Mount file JSON Service Account vào để Airflow kết nối với Google Cloud
-      - ./google-credentials.json:/opt/airflow/google-credentials.json
+      - ./gcpkey.json:/opt/airflow/google-credentials.json
       # [THÊM MỚI] Mount thư mục dbt project vào container
       - ./dbt:/opt/airflow/dbt
     ports:
