@@ -6,7 +6,9 @@ from datetime import datetime, timedelta
 import pandas as pd
 import time
 import os
-from vnstock import stock_historical_data
+
+# --- SỬA LẠI IMPORT THEO VNSTOCK3 ---
+from vnstock3 import Quote
 
 PROJECT_ID = 'stock-lambda-project'
 GCS_BUCKET = 'stock-datalake-raw-khoinguyen'
@@ -29,7 +31,7 @@ default_args = {
 }
 
 def upload_to_gcs(df, file_name, destination_blob_name):
-    if df.empty: return
+    if df is None or df.empty: return
     temp_path = f"/tmp/{file_name}"
     
     # 1. ÉP KIỂU THỜI GIAN
@@ -59,12 +61,17 @@ def fetch_today_daily(**kwargs):
     all_data = []
     for ticker in VN30_TICKERS:
         try:
-            df = stock_historical_data(symbol=ticker, start_date=TODAY_STR, end_date=TODAY_STR, resolution='1D', type='stock')
+            # --- CÚ PHÁP MỚI CỦA VNSTOCK3 ---
+            quote = Quote(symbol=ticker)
+            df = quote.history(start=TODAY_STR, end=TODAY_STR, interval='1D')
+            
             if df is not None and not df.empty:
                 df['symbol'] = ticker
                 all_data.append(df)
             time.sleep(1)
-        except Exception as e: print(f"Lỗi: {e}")
+        except Exception as e: 
+            print(f"Lỗi {ticker}: {e}")
+            
     if all_data:
         final_df = pd.concat(all_data, ignore_index=True)
         upload_to_gcs(final_df, "today_daily.parquet", f"bronze/daily_run/{TODAY_STR}_daily.parquet")
@@ -73,12 +80,17 @@ def fetch_today_1m(**kwargs):
     all_data = []
     for ticker in VN30_TICKERS:
         try:
-            df = stock_historical_data(symbol=ticker, start_date=TODAY_STR, end_date=TODAY_STR, resolution='1', type='stock')
+            # --- CÚ PHÁP MỚI CỦA VNSTOCK3 ---
+            quote = Quote(symbol=ticker)
+            df = quote.history(start=TODAY_STR, end=TODAY_STR, interval='1m')
+            
             if df is not None and not df.empty:
                 df['symbol'] = ticker
                 all_data.append(df)
             time.sleep(1)
-        except Exception as e: print(f"Lỗi: {e}")
+        except Exception as e: 
+            print(f"Lỗi {ticker}: {e}")
+            
     if all_data:
         final_df = pd.concat(all_data, ignore_index=True)
         upload_to_gcs(final_df, "today_1m.parquet", f"bronze/daily_run/{TODAY_STR}_1m.parquet")

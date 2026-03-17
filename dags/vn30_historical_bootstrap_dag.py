@@ -7,7 +7,9 @@ import pandas as pd
 import time
 import os
 from dateutil.relativedelta import relativedelta
-from vnstock import stock_historical_data
+
+# --- ĐÂY LÀ SỰ THAY ĐỔI CỦA VNSTOCK3 ---
+from vnstock import Quote 
 
 PROJECT_ID = 'stock-lambda-project'
 GCS_BUCKET = 'stock-datalake-raw-khoinguyen'
@@ -28,7 +30,7 @@ default_args = {
 }
 
 def upload_to_gcs(df, file_name, destination_blob_name):
-    if df.empty: return
+    if df is None or df.empty: return
     temp_path = f"/tmp/{file_name}"
     
     # 1. ÉP KIỂU THỜI GIAN
@@ -59,14 +61,20 @@ def fetch_historical_daily(**kwargs):
     end_date = datetime.now().strftime('%Y-%m-%d')
     start_date = '2000-01-01'
     all_data = []
+    
     for ticker in VN30_TICKERS:
         try:
-            df = stock_historical_data(symbol=ticker, start_date=start_date, end_date=end_date, resolution='1D', type='stock')
+            # --- CÚ PHÁP MỚI CỦA VNSTOCK3 ---
+            quote = Quote(symbol=ticker)
+            df = quote.history(start=start_date, end=end_date, interval='1D')
+            
             if df is not None and not df.empty:
                 df['symbol'] = ticker
                 all_data.append(df)
             time.sleep(1) 
-        except Exception as e: print(f"Lỗi {ticker}: {e}")
+        except Exception as e: 
+            print(f"Lỗi {ticker}: {e}")
+            
     if all_data:
         final_df = pd.concat(all_data, ignore_index=True)
         upload_to_gcs(final_df, "historical_daily.parquet", "bronze/historical_daily/data.parquet")
@@ -76,6 +84,7 @@ def fetch_historical_1m(**kwargs):
     end_date_obj = datetime.now()
     start_date_obj = end_date_obj - relativedelta(months=3)
     all_data = []
+    
     for ticker in VN30_TICKERS:
         current_start = start_date_obj
         while current_start < end_date_obj:
@@ -84,13 +93,19 @@ def fetch_historical_1m(**kwargs):
             str_start = current_start.strftime('%Y-%m-%d')
             str_end = current_end.strftime('%Y-%m-%d')
             try:
-                df = stock_historical_data(symbol=ticker, start_date=str_start, end_date=str_end, resolution='1', type='stock')
+                # --- CÚ PHÁP MỚI CỦA VNSTOCK3 ---
+                quote = Quote(symbol=ticker)
+                # Lưu ý: vnstock3 dùng '1m' cho resolution 1 phút thay vì '1' như bản cũ
+                df = quote.history(start=str_start, end=str_end, interval='1m')
+                
                 if df is not None and not df.empty:
                     df['symbol'] = ticker
                     all_data.append(df)
                 time.sleep(1.5) 
-            except Exception as e: print(f"Lỗi {ticker}: {e}")
+            except Exception as e: 
+                print(f"Lỗi {ticker}: {e}")
             current_start = current_end + relativedelta(days=1)
+            
     if all_data:
         final_df = pd.concat(all_data, ignore_index=True)
         upload_to_gcs(final_df, "historical_1m.parquet", "bronze/historical_1m/data.parquet")
