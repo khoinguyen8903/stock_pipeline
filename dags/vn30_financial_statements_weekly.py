@@ -98,7 +98,10 @@ def fetch_financial_statements(**kwargs):
         # 1. Chạy Regex chuẩn hóa tên cột để tương thích với BigQuery
         final_df.columns = final_df.columns.str.replace(r'\W+', '_', regex=True).str.strip('_')
         
-        # 2. Kiểm tra và loại bỏ các cột trùng lặp (giữ lại cột đầu tiên)
+        # 2. Ép tất cả tên cột về CHỮ THƯỜNG (Lowercase) để BigQuery không bị nhầm lẫn
+        final_df.columns = final_df.columns.str.lower()
+        
+        # 3. Kiểm tra và loại bỏ các cột trùng lặp (giữ lại cột đầu tiên)
         duplicate_columns = final_df.columns[final_df.columns.duplicated()].tolist()
         if duplicate_columns:
             logging.warning(f"Phát hiện và loại bỏ các cột bị trùng tên: {set(duplicate_columns)}")
