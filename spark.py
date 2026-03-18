@@ -83,7 +83,7 @@ def main():
             SparkSession.builder
             .appName("StockLocal")
             .master("local[*]")
-            .config("spark.driver.memory", "2g")
+            .config("spark.driver.memory", "1g")
             .config("spark.sql.shuffle.partitions", "2")
             .config("spark.default.parallelism", "2")
             .config("spark.ui.enabled", "false")
