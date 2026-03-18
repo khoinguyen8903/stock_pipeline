@@ -19,7 +19,7 @@ from vnstock import Vnstock
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-import vnstock3.core.utils.client as vn_client
+import vnstock.core.utils.client as vn_client
 
 session = requests.Session()
 retry = Retry(connect=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])

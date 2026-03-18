@@ -8,7 +8,7 @@ import time
 import os
 
 # --- SỬA LẠI IMPORT THEO VNSTOCK3 ---
-from vnstock3 import Quote
+from vnstock import Quote
 
 PROJECT_ID = 'stock-lambda-project'
 GCS_BUCKET = 'stock-datalake-raw-khoinguyen'

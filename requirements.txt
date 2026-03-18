@@ -2,7 +2,7 @@ apache-airflow-providers-apache-spark
 pyspark==3.5.0
 confluent-kafka
 pandas
-vnstock3
+vnstock
 pydantic-settings
 psycopg2-binary
 vnstock
