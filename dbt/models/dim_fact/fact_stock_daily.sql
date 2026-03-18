@@ -6,7 +6,7 @@
 ) }}
 
 WITH daily_silver AS (
-    SELECT * FROM {{ ref('slv_historical_daily') }}
+    SELECT * FROM {{ ref('stg_historical_daily') }}
     {% if is_incremental() %}
         WHERE DATE(time) >= (SELECT DATE_SUB(MAX(trading_date), INTERVAL 2 DAY) FROM {{ this }})
     {% endif %}
