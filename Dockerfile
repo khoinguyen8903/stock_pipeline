@@ -45,7 +45,7 @@ RUN pip install --no-cache-dir \
     pyspark==3.5.0 \
     confluent-kafka \
     pandas \
-    vnstock3 \
+    vnstock>=3.5.0 \
     ipython \
     pyarrow \
     fsspec \
