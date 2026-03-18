@@ -13,4 +13,4 @@ SELECT
     industry,
     charter_capital,
     issue_share
-FROM {{ ref('slv_company') }}
+FROM {{ ref('stg_company') }}
