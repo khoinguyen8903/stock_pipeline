@@ -1,44 +1,44 @@
 {{ 
     config(
-        materialized='table', 
+        materialized='incremental', 
         partition_by={
             "field": "time",
             "data_type": "timestamp",
             "granularity": "day"
         },
-        cluster_by=['symbol']
+        cluster_by=['symbol'],
+        -- Định nghĩa cột dùng để xác định dữ liệu mới khi chạy incremental
+        unique_key=['symbol', 'id'] 
     ) 
 }}
 
 WITH source_data AS (
     SELECT * FROM {{ source('bq_raw', 'stock_raw_daily') }}
+    
+    -- LOGIC INCREMENTAL: Chỉ lấy dữ liệu mới hơn thời gian cập nhật gần nhất
+    {% if is_incremental() %}
+        -- Lấy lùi lại 1 ngày để đảm bảo không miss dữ liệu nếu có late-arriving data
+        WHERE ingested_at >= (SELECT TIMESTAMP_SUB(MAX(ingested_at), INTERVAL 1 DAY) FROM {{ this }})
+    {% endif %}
 ),
 
 casted_data AS (
     SELECT
-        -- 1. Giữ nguyên các cột định danh
         id,
         symbol,
-        
-        -- 2. Ép kiểu dữ liệu (Data Type Casting)
-        CAST(price AS FLOAT64) AS price,
+        -- Sửa thành NUMERIC cho dữ liệu tài chính
+        CAST(price AS NUMERIC) AS price,
         CAST(volume AS INT64) AS volume,
-        
-        -- 3. Các cột thời gian và phân loại
         time,
         match_type,
         ingested_at
     FROM source_data
-    -- Bỏ qua những dòng bị lỗi hoàn toàn (nếu id hoặc symbol bị null)
     WHERE id IS NOT NULL 
       AND symbol IS NOT NULL
 )
 
--- 4. Khử trùng lặp (Deduplication) bằng cửa sổ window function
 SELECT *
 FROM casted_data
--- Lệnh QUALIFY là "đặc sản" của BigQuery giúp lọc trùng cực nhanh
--- Ý nghĩa: Nhóm theo mã và id, xếp theo thời gian ingest mới nhất, và chỉ lấy dòng số 1
 QUALIFY ROW_NUMBER() OVER (
     PARTITION BY symbol, id 
     ORDER BY ingested_at DESC
