@@ -13,7 +13,7 @@ import pandas as pd
 from confluent_kafka import KafkaError, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from vnstock3 import Vnstock 
+from vnstock import Vnstock 
 
 # --- BỔ SUNG: LỚP GIÁP BẢO VỆ MẠNG (CHỐNG LỖI 502 VÀ TIMEOUT) ---
 import requests
