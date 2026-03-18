@@ -7,7 +7,6 @@
             "granularity": "day"
         },
         cluster_by=['symbol'],
-        -- Định nghĩa cột dùng để xác định dữ liệu mới khi chạy incremental
         unique_key=['symbol', 'id'] 
     ) 
 }}
