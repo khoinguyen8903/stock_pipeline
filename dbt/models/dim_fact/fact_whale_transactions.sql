@@ -104,4 +104,3 @@ WHERE is_trading_day = TRUE
 -- Dedupe: nếu có tick trùng, lấy ingested_at mới nhất
 QUALIFY ROW_NUMBER() OVER(PARTITION BY id ORDER BY ingested_at DESC) = 1
 
-ORDER BY trading_date DESC, time DESC
