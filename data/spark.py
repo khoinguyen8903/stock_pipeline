@@ -87,7 +87,7 @@ def main():
             SparkSession.builder
             .appName("StockStreamingDocker")
             .master("local[*]") 
-            .config("spark.driver.memory", "2g")
+            # [ĐÃ SỬA] Đã xóa dòng .config("spark.driver.memory", "2g") vì không có tác dụng
             # TỐI ƯU 1: Đổi thành 3 để khớp với 3 Partitions của Kafka
             .config("spark.sql.shuffle.partitions", "3") 
             # TỐI ƯU 2: Cài đặt đúng múi giờ Việt Nam
@@ -95,7 +95,8 @@ def main():
             .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1") 
             .getOrCreate()
         )
-        spark.sparkContext.setLogLevel("WARN")
+        # [ĐÃ SỬA] Chuyển thành INFO để bạn có thể xem log theo dõi bộ nhớ qua từng batch
+        spark.sparkContext.setLogLevel("INFO")
         print(">>> [2/5] SPARK SESSION OK!", flush=True)
     except Exception as e:
         print(f">>> [ERROR] LOI KHOI TAO SPARK: {e}", flush=True)
@@ -124,11 +125,15 @@ def main():
         .select(F.from_json(F.col("json_str"), TICK_SCHEMA).alias("data"))
         .select("data.*")
         .filter(F.col("price").isNotNull())
-        .withColumn("event_time", F.col("time").cast("timestamp"))
+        
+        # [ĐÃ SỬA] Chuyển đổi định dạng thời gian đúng chuẩn để Spark tiến được Watermark
+        .withColumn("event_time", F.to_timestamp(F.col("time"), "yyyy-MM-dd HH:mm:ss"))
         
         # TỐI ƯU 3: Đặt Watermark 2 phút và loại bỏ trùng lặp dựa trên ID giao dịch
         .withWatermark("event_time", "2 minutes")
-        .dropDuplicates(["symbol", "id"]) 
+        
+        # [ĐÃ SỬA] Thêm event_time vào dropDuplicates để kích hoạt cơ chế tự động dọn RAM
+        .dropDuplicates(["symbol", "id", "event_time"]) 
     )
 
     candles = (

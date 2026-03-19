@@ -68,6 +68,8 @@ with DAG(
         bash_command='''
         spark-submit \
         --master local[*] \
+        --driver-memory 2g \
+        --executor-memory 2g \
         --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 \
         /opt/airflow/data/spark.py
         ''',
