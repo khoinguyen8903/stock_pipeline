@@ -23,3 +23,5 @@ data/gcpkey.json
 data/*.json
 # Ignore dbt profiles with credentials
 dbt/profiles.yml
+.user.yml
+dbt/.user.yml

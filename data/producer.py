@@ -172,6 +172,7 @@ class VnStockPoller:
             stock_client = Vnstock().stock(symbol=sym, source='VCI')
             df_data = stock_client.quote.intraday(page_size=2000)
 
+            # Lớp phòng thủ 1: Nếu không có lỗi nhưng trả về DataFrame rỗng
             if df_data is None or df_data.empty:
                 return
 
@@ -225,7 +226,12 @@ class VnStockPoller:
             self._logger.info(f"[{sym}] Pushed {len(records)} records. Watermark: {new_max_time}")
 
         except Exception as e:
-            self._logger.warning(f"Fetch error for {sym}: {e}")
+            error_str = str(e)
+            # Lớp phòng thủ 2: Bắt lỗi êm ái khi Vnstock/Pandas văng lỗi do rỗng dữ liệu
+            if "ValueError" in error_str or "RetryError" in error_str:
+                self._logger.info(f"[{sym}] Đang chờ dữ liệu (thị trường có thể chưa mở cửa)...")
+            else:
+                self._logger.warning(f"Lỗi fetch data cho {sym}: {error_str}")
 
     def stop(self) -> None:
         self._logger.info("Đang dừng hệ thống quét, chờ các luồng hoàn tất...")
