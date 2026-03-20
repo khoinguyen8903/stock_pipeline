@@ -9,9 +9,7 @@
 WITH base_daily AS (
     SELECT * FROM {{ ref('fact_stock_daily_base') }}
     WHERE is_trading_day = TRUE
-    
     {% if is_incremental() %}
-        -- KÉO RỘNG: Lấy 100 ngày lịch để đảm bảo luôn có dư 50 ngày giao dịch (phục vụ MA_50)
         AND trading_date >= (SELECT DATE_SUB(MAX(trading_date), INTERVAL 100 DAY) FROM {{ this }})
     {% endif %}
 ),
