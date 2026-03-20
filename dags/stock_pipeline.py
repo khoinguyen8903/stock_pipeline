@@ -34,7 +34,7 @@ with DAG(
     default_args=default_args,
     description='Hệ thống tự động theo giờ giao dịch sàn HOSE/HNX (9h - 15h)',
     # CHUẨN: Chạy lúc 8:55 sáng từ Thứ 2 đến Thứ 6
-    schedule_interval='55 8 * * 1-5', 
+    schedule_interval='59 8 * * 1-5', 
     start_date=datetime(2026, 3, 1, tzinfo=local_tz),
     catchup=False,
     tags=['stock', 'vietnam', 'realtime'],
