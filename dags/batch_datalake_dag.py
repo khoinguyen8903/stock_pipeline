@@ -1,6 +1,7 @@
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
+from airflow.datasets import Dataset # [THÊM MỚI 1]: Import Dataset
 from datetime import datetime, timedelta
 import pendulum
 
@@ -50,18 +51,18 @@ with DAG(
     load_gcs_to_bigquery = GCSToBigQueryOperator(
         task_id='load_gcs_to_bigquery',
         bucket='stock-datalake-raw-khoinguyen',
-        source_objects=[exact_gcs_file], # Chỉ hút đúng file vừa sinh ra
+        source_objects=[exact_gcs_file], 
         destination_project_dataset_table='stock-lambda-project.stock_data_warehouse.stock_raw_daily',
         source_format='PARQUET',
         write_disposition='WRITE_APPEND',      
-        
         autodetect=False, 
         schema_fields=ORIGINAL_TICK_SCHEMA, 
-        # KHÔI PHỤC: Cắt theo ngày dựa trên cột 'time'
         time_partitioning={"type": "DAY", "field": "time"}, 
-        # KHÔI PHỤC: Gom cụm theo mã cổ phiếu
         cluster_fields=['symbol'], 
         schema_update_options=['ALLOW_FIELD_ADDITION'],
+        
+        # [THÊM MỚI 2]: Khai báo Outlet (Cái loa phát tín hiệu)
+        outlets=[Dataset("bigquery://stock_raw_daily")]
     )
 
     run_kafka_to_gcs >> load_gcs_to_bigquery

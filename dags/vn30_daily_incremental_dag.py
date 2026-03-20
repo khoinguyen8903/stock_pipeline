@@ -2,12 +2,13 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
+from airflow.datasets import Dataset # [THÊM MỚI 1]: Import Dataset
+from airflow.operators.empty import EmptyOperator # [THÊM MỚI 2]: Dùng để làm điểm chốt an toàn
 from datetime import datetime, timedelta
 import pandas as pd
 import time
 import os
 
-# --- SỬA LẠI IMPORT THEO VNSTOCK3 ---
 from vnstock import Quote
 
 PROJECT_ID = 'stock-lambda-project'
@@ -30,21 +31,19 @@ default_args = {
     'retry_delay': timedelta(minutes=2),
 }
 
+# --- CÁC HÀM PYTHON GIỮ NGUYÊN ---
 def upload_to_gcs(df, file_name, destination_blob_name):
     if df is None or df.empty: return
     temp_path = f"/tmp/{file_name}"
     
-    # 1. ÉP KIỂU THỜI GIAN
     df['time'] = pd.to_datetime(df['time'])
     df['ingestion_timestamp'] = pd.Timestamp.now(tz='UTC') 
     
-    # 2. ÉP KIỂU STRING
     cols_to_string = ['open', 'high', 'low', 'close', 'volume', 'symbol', 'ticker']
     for col in cols_to_string:
         if col in df.columns:
             df[col] = df[col].astype(str)
             
-    # 3. FIX LỖI NANOSECOND
     df.to_parquet(
         temp_path, 
         index=False, 
@@ -61,10 +60,8 @@ def fetch_today_daily(**kwargs):
     all_data = []
     for ticker in VN30_TICKERS:
         try:
-            # --- CÚ PHÁP MỚI CỦA VNSTOCK3 ---
             quote = Quote(symbol=ticker)
             df = quote.history(start=TODAY_STR, end=TODAY_STR, interval='1D')
-            
             if df is not None and not df.empty:
                 df['symbol'] = ticker
                 all_data.append(df)
@@ -80,10 +77,8 @@ def fetch_today_1m(**kwargs):
     all_data = []
     for ticker in VN30_TICKERS:
         try:
-            # --- CÚ PHÁP MỚI CỦA VNSTOCK3 ---
             quote = Quote(symbol=ticker)
             df = quote.history(start=TODAY_STR, end=TODAY_STR, interval='1m')
-            
             if df is not None and not df.empty:
                 df['symbol'] = ticker
                 all_data.append(df)
@@ -94,6 +89,7 @@ def fetch_today_1m(**kwargs):
     if all_data:
         final_df = pd.concat(all_data, ignore_index=True)
         upload_to_gcs(final_df, "today_1m.parquet", f"bronze/daily_run/{TODAY_STR}_1m.parquet")
+
 
 with DAG(
     'vn30_daily_incremental',
@@ -125,7 +121,7 @@ with DAG(
         source_objects=[f'bronze/daily_run/{TODAY_STR}_daily.parquet'],
         destination_project_dataset_table=f'{PROJECT_ID}.{BQ_DATASET}.bronze_historical_daily',
         source_format='PARQUET',
-        write_disposition='WRITE_APPEND', # DAG Daily thì dùng APPEND
+        write_disposition='WRITE_APPEND', 
         autodetect=False,
         schema_fields=ELT_SCHEMA,
         schema_update_options=['ALLOW_FIELD_ADDITION'],
@@ -145,5 +141,12 @@ with DAG(
         gcp_conn_id=GCP_CONN_ID,
     )
 
-    t1 >> t3
-    t2 >> t4
+    # [THÊM MỚI 3]: Điểm chốt an toàn để phát tín hiệu
+    finish_ingestion = EmptyOperator(
+        task_id='finish_daily_ingestion',
+        outlets=[Dataset("bigquery://bronze_historical_daily")]
+    )
+
+    # Nối luồng (T1 nối T3, T2 nối T4, và cả T3, T4 phải cùng đổ về điểm chốt)
+    t1 >> t3 >> finish_ingestion
+    t2 >> t4 >> finish_ingestion

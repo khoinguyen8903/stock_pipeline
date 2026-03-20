@@ -3,7 +3,7 @@
     partition_by={"field": "trading_date", "data_type": "date"},
     cluster_by=['company_sk', 'symbol'],
     unique_key=['symbol', 'trading_date'],
-    description='Base layer: Daily candle OHLCV + fundamental metrics (pct_change, traded_value). Giữ lookback 2 ngày để xử lý late-arriving data.'
+    description='Base layer: Daily candle OHLCV + fundamental metrics. Đã chuẩn hóa giá nhân 1000.'
 ) }}
 
 WITH daily_silver AS (
@@ -35,8 +35,11 @@ SELECT
     d.close_price,
     d.volume,
     
+    -- Tính % thay đổi Intraday (Biến động trong phiên)
     ROUND((d.close_price - d.open_price) / NULLIF(d.open_price, 0) * 100, 2) AS pct_change,
-    (d.close_price * d.volume) AS traded_value
+    
+    -- SỬA LỖI ĐƠN VỊ: Nhân 1000 cho giá để ra đúng VNĐ
+    (d.close_price * 1000 * d.volume) AS traded_value
 
 FROM daily_silver d
 
