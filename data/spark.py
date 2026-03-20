@@ -96,7 +96,7 @@ def main():
             .getOrCreate()
         )
         # [ĐÃ SỬA] Chuyển thành INFO để bạn có thể xem log theo dõi bộ nhớ qua từng batch
-        spark.sparkContext.setLogLevel("INFO")
+        spark.sparkContext.setLogLevel("WARN")
         print(">>> [2/5] SPARK SESSION OK!", flush=True)
     except Exception as e:
         print(f">>> [ERROR] LOI KHOI TAO SPARK: {e}", flush=True)
