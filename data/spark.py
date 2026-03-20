@@ -127,7 +127,7 @@ def main():
         .filter(F.col("price").isNotNull())
         
         # [ĐÃ SỬA] Chuyển đổi định dạng thời gian đúng chuẩn để Spark tiến được Watermark
-        .withColumn("event_time", F.to_timestamp(F.col("time"), "yyyy-MM-dd HH:mm:ss"))
+        .withColumn("event_time", F.to_timestamp(F.col("time"), "yyyy-MM-dd HH:mm:ssXXX"))
         
         # TỐI ƯU 3: Đặt Watermark 2 phút và loại bỏ trùng lặp dựa trên ID giao dịch
         .withWatermark("event_time", "2 minutes")
