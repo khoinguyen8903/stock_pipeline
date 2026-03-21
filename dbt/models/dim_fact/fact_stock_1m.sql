@@ -45,7 +45,7 @@ SELECT
     m.volume,
     
     -- 5. Chỉ số phái sinh
-    (m.close_price * m.volume) AS traded_value
+    (m.close_price * 1000 * m.volume) AS traded_value
 
 FROM minute_silver m
 
