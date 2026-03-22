@@ -36,7 +36,8 @@ with DAG(
     # Task dbt: Chạy các model staging, fact, và marts
     dbt_run_eod_analytics = BashOperator(
         task_id='dbt_run_eod_models',
-        bash_command=f"cd {DBT_PROJECT_DIR} && dbt run --select stg_historical_daily stg_historical_1m fact_stock_daily_base fact_stock_daily fact_stock_1m",
+        # CHANGED: Appended mart_daily_stock_performance and mart_intraday_price
+        bash_command=f"cd {DBT_PROJECT_DIR} && dbt run --select stg_historical_daily stg_historical_1m fact_stock_daily_base fact_stock_daily fact_stock_1m mart_daily_stock_performance mart_intraday_price",
         do_xcom_push=False,
     )
 

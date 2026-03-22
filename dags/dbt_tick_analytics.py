@@ -36,7 +36,8 @@ with DAG(
     # Task dbt: Chạy các model liên quan đến ticks
     dbt_run_tick_analytics = BashOperator(
         task_id='dbt_run_tick_models',
-        bash_command=f"cd {DBT_PROJECT_DIR} && dbt run --select stg_stock_ticks fact_buy_sell_pressure fact_whale_transactions",
+        # CHANGED: Appended mart_intraday_whale and mart_intraday_pressure
+        bash_command=f"cd {DBT_PROJECT_DIR} && dbt run --select stg_stock_ticks fact_buy_sell_pressure fact_whale_transactions mart_intraday_whale mart_intraday_pressure",
         do_xcom_push=False,
     )
 
