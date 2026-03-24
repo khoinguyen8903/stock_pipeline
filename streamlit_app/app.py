@@ -20,7 +20,7 @@ from sqlalchemy.engine import Engine
 # ============================================================
 st.set_page_config(
     page_title="Hệ Thống Phân Tích Dòng Tiền",
-    page_icon="💹",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -561,7 +561,7 @@ def render_price_panel(row: pd.Series) -> None:
     st.markdown(
         f'<div style="background:#161b22;border:1px solid #30363d;border-radius:10px;'
         f'padding:16px 14px;font-family:Segoe UI,sans-serif;">'
-        f'<div style="color:#8b949e;font-size:12px;margin-bottom:2px;">📅 {date_str}</div>'
+        f'<div style="color:#8b949e;font-size:12px;margin-bottom:2px;">{date_str}</div>'
         f'<div style="color:#e6edf3;font-size:17px;font-weight:700;margin-bottom:10px;">{symbol}</div>'
         f'<div style="text-align:center;margin-bottom:14px;">'
         f'<span style="font-size:30px;font-weight:700;color:{accent};">{fmt(close)}</span>'
@@ -627,7 +627,7 @@ def _build_whale_donut(df: pd.DataFrame, symbol: str) -> go.Figure:
         height=380,
         margin=dict(l=10, r=10, t=40, b=10),
         paper_bgcolor="rgba(0,0,0,0)",
-        title=dict(text=f"🐋 Dòng tiền Cá mập — {symbol}", x=0.5, xanchor="center"),
+        title=dict(text=f"Dòng tiền Cá mập — {symbol}", x=0.5, xanchor="center"),
         showlegend=True,
         legend=dict(
             orientation="h",
@@ -678,7 +678,7 @@ def _build_pressure_7d_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
         margin=dict(l=0, r=0, t=40, b=0),
         paper_bgcolor="rgba(0,0,0,0)",
         title=dict(
-            text=f"📊 Áp lực Mua / Bán {n_sessions} phiên — {symbol}",
+            text=f"Áp lực Mua / Bán {n_sessions} phiên — {symbol}",
             x=0.5, xanchor="center",
         ),
         legend=dict(
@@ -739,16 +739,16 @@ def render_microbatch_charts(
 
     # =================== TẦNG 1: KPI Cards ===================
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("🟢 Tổng Mua Chủ Động", f"{buy_vol:,}")
-    k2.metric("🔴 Tổng Bán Chủ Động", f"{sell_vol:,}")
+    k1.metric("Tổng Mua Chủ Động", f"{buy_vol:,}")
+    k2.metric("Tổng Bán Chủ Động", f"{sell_vol:,}")
     k3.metric(
-        "📐 Độ Lệch (Net Volume)",
+        "Độ Lệch (Net Volume)",
         f"{net_vol:,}",
         delta=f"{net_vol:+,}",
         delta_color="normal",
     )
     whale_b = whale_total / 1e9
-    k4.metric("🐋 Tổng Dòng Tiền Cá Mập", f"{whale_b:,.2f} B VNĐ")
+    k4.metric("Tổng Dòng Tiền Cá Mập", f"{whale_b:,.2f} B VNĐ")
 
     st.markdown("")
 
@@ -898,7 +898,7 @@ def main() -> None:
     # SIDEBAR — Symbol picker (by sector, symbol only) + Single date
     # ------------------------------------------------------------------
     with st.sidebar:
-        st.header("⚙️ Bộ lọc")
+        st.header("Bộ lọc")
 
         try:
             df_symbols = fetch_symbol_list()
@@ -937,7 +937,7 @@ def main() -> None:
     # TABS
     # ------------------------------------------------------------------
     tab_tech, tab_flow, tab_live = st.tabs(
-        ["📈 Phân tích Kỹ thuật", "🐳 Dòng tiền (10p)", "🕯️ Nến 1 phút"]
+        ["Phân tích Kỹ thuật", "Dòng tiền (10p)", "Nến 1 phút"]
     )
 
     # ====================== TAB TECH ==============================
@@ -961,12 +961,12 @@ def main() -> None:
                 with col_info:
                     panel_mode = st.radio(
                         "panel_mode",
-                        ["📊 Thông tin", "📋 Sổ lệnh"],
+                        ["Thông tin", "Sổ lệnh"],
                         horizontal=True,
                         label_visibility="collapsed",
                     )
 
-                    if panel_mode == "📊 Thông tin":
+                    if panel_mode == "Thông tin":
                         dates = pd.to_datetime(df_daily["trading_date"]).dt.date
                         mask = dates == selected_date
                         if mask.any():
@@ -1004,13 +1004,13 @@ def main() -> None:
         is_live = selected_date == datetime.date.today()
 
         if is_live:
-            st.subheader(f"📈 {symbol} — Nến 1 phút (Real-time)")
-            st.info("⚡ Đang hiển thị dữ liệu Real-time (Luồng Nóng — PostgreSQL)")
+            st.subheader(f"{symbol} — Nến 1 phút (Real-time)")
+            st.info("Đang hiển thị dữ liệu Real-time (Luồng Nóng — PostgreSQL)")
             render_realtime_1m_chart(symbol)
         else:
-            st.subheader(f"📈 {symbol} — Nến 1 phút ({selected_date:%d/%m/%Y})")
+            st.subheader(f"{symbol} — Nến 1 phút ({selected_date:%d/%m/%Y})")
             st.info(
-                f"📊 Đang hiển thị dữ liệu Lịch sử ngày "
+                f"Đang hiển thị dữ liệu Lịch sử ngày "
                 f"**{selected_date:%d/%m/%Y}** (Luồng Lạnh — BigQuery)"
             )
             render_historical_1m_chart(symbol, selected_date)
