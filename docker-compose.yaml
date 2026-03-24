@@ -95,5 +95,33 @@ services:
         limits:
           memory: 6G
 
+  # 5. Streamlit Dashboard
+  streamlit_app:
+    build:
+      context: ./streamlit_app
+      dockerfile: Dockerfile
+    container_name: streamlit_app
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_DB=airflow
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - PROJECT_ID=stock-lambda-project
+      - BQ_DATASET=stock_data_warehouse
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcpkey.json
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data/gcpkey.json:/app/gcpkey.json:ro
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
 volumes:
   postgres_data:

@@ -10,3 +10,4 @@ pandas
 pyarrow
 fsspec
 google-cloud-storage
+streamlit==1.32.0

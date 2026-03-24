@@ -17,6 +17,8 @@ __pycache__/
 .DS_Store
 # Bỏ qua môi trường ảo của Python
 venv/
+.venv/
+*/.venv/
 
 # CHẮC CHẮN BỎ QUA FILE KEY GCP TRONG THƯ MỤC DATA
 data/gcpkey.json
@@ -25,3 +27,7 @@ data/*.json
 dbt/profiles.yml
 .user.yml
 dbt/.user.yml
+.cursorrules
+
+# Streamlit secrets
+streamlit_app/.streamlit/secrets.toml
