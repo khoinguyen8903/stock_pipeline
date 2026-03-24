@@ -346,4 +346,3 @@ docker compose restart airflow
 
 ---
 
-<p align="center">Built with ❤️ by <strong>Khoi Nguyen</strong></p>
